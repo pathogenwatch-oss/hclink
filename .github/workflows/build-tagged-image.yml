@@ -1,0 +1,27 @@
+name: Docker Image CI
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        sparse-checkout: .
+    - name: Set env
+      run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+    - name: Log in to registry
+      env:
+        token: ${{ secrets.GITLAB_ACCESS_TOKEN }}
+      run: docker login -u cgps-admin -p ${token} registry.gitlab.com
+    - name: Build the Docker image
+      run: docker build . --tag registry.gitlab.com/cgps/pathogenwatch/analyses/hclink:${RELEASE_VERSION}
+    - name: Push the Docker image
+      run: docker push registry.gitlab.com/cgps/pathogenwatch/analyses/hclink:${RELEASE_VERSION}
