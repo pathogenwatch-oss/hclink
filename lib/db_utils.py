@@ -1,5 +1,6 @@
 import json
 import lzma
+import gzip
 import shutil
 import socket
 import ssl
@@ -16,8 +17,8 @@ from retry import retry
 
 
 def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> dict[str, list[str]]:
-    with lzma.open(hiercc_profiles_json, "r") as hiercc_profiles_fh:
-        profiles = json.loads(hiercc_profiles_fh.read().decode('utf-8'))
+    with gzip.open(hiercc_profiles_json, "rt") as hiercc_profiles_fh:
+        profiles = json.loads(hiercc_profiles_fh.read())
         processed: dict[str, list[str]] = {}
         for profile in profiles:
             if "info" not in profile or "hierCC" not in profile["info"]:
@@ -63,10 +64,23 @@ def download_profiles(data_dir: Path) -> Path:
 
 
 @retry(tries=3, delay=1, backoff=5)
-def fetch_hiercc_batch(key: str, offset: int, limit: int) -> tuple[int, dict[str, Any]]:
+def fetch_hiercc_batch(api_key: str, offset: int, limit: int) -> tuple[int, dict[str, Any]]:
     r = requests.get(
         f"https://enterobase.warwick.ac.uk/api/v2.0/senterica/cgMLST_v2/sts?limit={limit}&offset={offset}&scheme=cgMLST_v2",
-        headers={"Authorization": f"Basic {key}"}
+        headers={"Authorization": f"Basic {api_key}"}
+    )
+    if r.status_code != 200:
+        print(r, file=sys.stderr)
+        r.raise_for_status()
+    return r.status_code, r.json()
+
+
+@retry(tries=3, delay=1, backoff=5)
+def fetch_hiercc_batch_fallback(api_key: str, index: int, block_size: int) -> tuple[int, dict[str, Any]]:
+    st_filter = f'st_id={",".join([str(st) for st in range(index, index + block_size)])}'
+    r = requests.get(
+        f"https://enterobase.warwick.ac.uk/api/v2.0/senterica/cgMLST_v2/sts?{st_filter}&scheme=cgMLST_v2",
+        headers={"Authorization": f"Basic {api_key}"}
     )
     if r.status_code != 200:
         print(r, file=sys.stderr)
@@ -75,20 +89,38 @@ def fetch_hiercc_batch(key: str, offset: int, limit: int) -> tuple[int, dict[str
 
 
 def download_hiercc_profiles(key: str, data_dir: Path = "db", limit: int = 10000, safety_valve: int = 250000) -> Path:
-    out_file = data_dir / "hiercc_profiles.json.xz"
-    # curl -X GET --header "Accept: application/json" --header "Authorization: Basic ZXlKaGJHY2lPaUpJVXpJMU5pSXNJbWxoZENJNk1UY3dOalV4T0RZd05Td2laWGh3SWpveE56TTRNRFUwTmpBMWZRLmV5SnBaQ0k2TVRVNExDSmxiV0ZwYkNJNkltMHVhaTV6WlhKblpXRnVkREZBWjI5dloyeGxiV0ZwYkM1amIyMGlMQ0oxYzJWeWJtRnRaU0k2SW1waFkyc2lMQ0pqYVhSNUlqb2lUV1YwY205d2IyeHBjeUlzSW1OdmRXNTBjbmtpT2lKVmJtbDBaV1FnUzJsdVoyUnZiU0lzSW1acGNuTjBibUZ0WlNJNklrcGhZMnNpTENKc1lYTjBibUZ0WlNJNklsTnRhWFJvSWl3aVkyOXVabWx5YldWa0lqb3hMQ0pwYm5OMGFYUjFkR2x2YmlJNklrRkRUVVVnYkdGaWN5SXNJbVJsY0dGeWRHMWxiblFpT2lKWFpXbHlaQ0JEYUdWdGFXTmhiSE1nUkdWd1lYSjBiV1Z1ZENJc0ltRmtiV2x1YVhOMGNtRjBiM0lpT201MWJHd3NJbUZqZEdsMlpTSTZiblZzYkN3aWRtbGxkMTl6Y0dWamFXVnpJam9pVkhKMVpTSXNJbUZ3YVY5aFkyTmxjM05mYzJWdWRHVnlhV05oSWpvaVZISjFaU0lzSW5acFpYZGZjM0JsWTJsbGN6RWlPaUpVY25WbElpd2laR1ZzWlhSbFgzTjBjbUZwYm5NaU9pSlVjblZsSWl3aVkyaGhibWRsWDJGemMyVnRZbXg1WDNOMFlYUjFjeUk2SWxSeWRXVWlMQ0pqYUdGdVoyVmZZWE56WlcxaWJIbGZjbVZzWldGelpWOWtZWFJsSWpvaVZISjFaU0lzSW1Ob1lXNW5aVjl6ZEhKaGFXNWZiM2R1WlhJaU9pSlVjblZsSWl3aWRYQnNiMkZrWDNKbFlXUnpNU0k2SWxSeWRXVWlmUS5MY1hsaWFTdDFuN1pBZmxXOHFFaF81NW9JZEtyREt4Vl91dl8tUmFQUEJVOicn" "https://enterobase.warwick.ac.uk/api/v2.0/senterica/cgMLST_v2/sts?limit=50&offset=0&scheme=cgMLST_v2"
+    out_file = data_dir / "hiercc_profiles.json.gz"
 
-    with lzma.open(out_file, 'w') as out_fh:
+    with gzip.open(out_file, 'wt') as out_fh:
         sts = []
         offset: int = 0
         while offset < safety_valve:
             status, batch = fetch_hiercc_batch(key, offset, limit)
+
             if batch is None or not batch or not batch["STs"]:
                 break
             sts.extend(batch["STs"])
             offset += limit
             print(f"{datetime.now()},{offset},{len(sts)}", file=sys.stderr)
-        out_fh.write(json.dumps(sts).encode('utf-8'))
+        lowest_st: int
+        for st in sts:
+            st_value = int(st["ST_id"])
+            if st_value < 0:
+                continue
+            lowest_st = st_value
+            break
+        print(f"Lowest ST: {lowest_st}", file=sys.stderr)
+        end_size = lowest_st - 100
+        for i in range(1, lowest_st, 100):
+            if i > end_size:
+                block_size = lowest_st - i
+            else:
+                block_size = 100
+            status, batch = fetch_hiercc_batch_fallback(key, i, block_size)
+            sts.extend(batch["STs"])
+            print(f"{datetime.now()},{i},{len(sts)}", file=sys.stderr)
+        out_fh.write(json.dumps(sts))
+
     return out_file
 
 
