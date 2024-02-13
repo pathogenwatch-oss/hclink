@@ -1,5 +1,6 @@
 FROM python:3.11-slim
 
+ARG VERSION
 ARG API_KEY
 
 #RUN apt update && \
@@ -22,8 +23,9 @@ COPY lib /hclink/lib
 COPY LICENSE /hclink/LICENSE
 
 ENV API_KEY=${API_KEY}
+ENV VERSION=${VERSION}
 
-RUN python hclink.py build ${API_KEY} --clean
+RUN python hclink.py build ${VERSION} ${API_KEY} --clean
 
 ENTRYPOINT ["python", "hclink.py", "assign", "-"]
 
