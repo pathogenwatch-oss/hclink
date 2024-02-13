@@ -1,6 +1,6 @@
+import gzip
 import json
 import lzma
-import gzip
 import shutil
 import socket
 import ssl
@@ -75,50 +75,25 @@ def fetch_hiercc_batch(api_key: str, offset: int, limit: int) -> tuple[int, dict
     return r.status_code, r.json()
 
 
-@retry(tries=3, delay=1, backoff=5)
-def fetch_hiercc_batch_fallback(api_key: str, index: int, block_size: int) -> tuple[int, dict[str, Any]]:
-    st_filter = f'st_id={",".join([str(st) for st in range(index, index + block_size)])}'
-    r = requests.get(
-        f"https://enterobase.warwick.ac.uk/api/v2.0/senterica/cgMLST_v2/sts?{st_filter}&scheme=cgMLST_v2",
-        headers={"Authorization": f"Basic {api_key}"}
-    )
-    if r.status_code != 200:
-        print(r, file=sys.stderr)
-        r.raise_for_status()
-    return r.status_code, r.json()
-
-
-def download_hiercc_profiles(key: str, data_dir: Path = "db", limit: int = 10000, safety_valve: int = 250000) -> Path:
+def download_hiercc_profiles(
+        api_key: str,
+        data_dir: Path = "db",
+        limit: int = 10000,
+        safety_valve: int = 1000000
+) -> Path:
     out_file = data_dir / "hiercc_profiles.json.gz"
 
     with gzip.open(out_file, 'wt') as out_fh:
         sts = []
         offset: int = 0
         while offset < safety_valve:
-            status, batch = fetch_hiercc_batch(key, offset, limit)
+            status, batch = fetch_hiercc_batch(api_key, offset, limit)
 
             if batch is None or not batch or not batch["STs"]:
                 break
             sts.extend(batch["STs"])
             offset += limit
             print(f"{datetime.now()},{offset},{len(sts)}", file=sys.stderr)
-        lowest_st: int
-        for st in sts:
-            st_value = int(st["ST_id"])
-            if st_value < 0:
-                continue
-            lowest_st = st_value
-            break
-        print(f"Lowest ST: {lowest_st}", file=sys.stderr)
-        end_size = lowest_st - 100
-        for i in range(1, lowest_st, 100):
-            if i > end_size:
-                block_size = lowest_st - i
-            else:
-                block_size = 100
-            status, batch = fetch_hiercc_batch_fallback(key, i, block_size)
-            sts.extend(batch["STs"])
-            print(f"{datetime.now()},{i},{len(sts)}", file=sys.stderr)
         out_fh.write(json.dumps(sts))
 
     return out_file

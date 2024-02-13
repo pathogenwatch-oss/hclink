@@ -3,8 +3,8 @@ import gzip
 import json
 import lzma
 import multiprocessing
-import sys
 import os
+import sys
 from datetime import datetime
 from itertools import repeat
 from pathlib import Path
@@ -16,14 +16,15 @@ from bitarray.util import count_and, count_xor, sc_decode, sc_encode, serialize
 from typer import Argument, Option
 from typing_extensions import Annotated
 
-from lib.db_utils import download_hiercc_profiles, download_profiles, read_gap_profiles, \
-    read_raw_hiercc_profiles, read_reference_profiles
+from lib.db_utils import (download_hiercc_profiles, download_profiles,
+                          read_gap_profiles, read_raw_hiercc_profiles, read_reference_profiles)
 
 app = typer.Typer()
 
 
 @app.command()
 def build(
+        version: str,
         api_key: str,
         db_dir: Annotated[
             Path,
@@ -36,7 +37,7 @@ def build(
         db_dir.mkdir()
     profiles_csv: Path = download_profiles(db_dir)
     hiercc_download: Path = download_hiercc_profiles(api_key, db_dir)
-    write_db(profiles_csv, hiercc_download)
+    write_db(version, profiles_csv, hiercc_download)
 
     if clean:
         profiles_csv.unlink()
@@ -52,6 +53,7 @@ def st_info(st: str, hiercc_profile: list[str]) -> str:
 
 @app.command()
 def write_db(
+        version: str,
         profiles_csv: Annotated[
             Path, Option("-p", "--profiles-csv", help="Gzipped profiles CSV location (.gz)", exists=True, readable=True,
                          file_okay=True, dir_okay=False)] = "db/cgmlst_profiles.csv.gz",
@@ -88,7 +90,8 @@ def write_db(
                     "array_size": array_size,
                     "family_sizes": family_sizes,
                     "gap_slice": gap_slice,
-                    "datestamp": str(datetime.now())
+                    "datestamp": str(datetime.now()),
+                    "version": version
                 }), file=metadata_fh)
 
     hiercc_profiles: dict[str, list[str]] = read_raw_hiercc_profiles(hiercc_profiles_json)
@@ -209,7 +212,14 @@ def assign(
                          help="Reference profiles file. CSV of 'sample,ST,HierCC...,encoded profile'",
                          file_okay=False, dir_okay=True, writable=False,
                          readable=True)] = "db",
-        num_cpu: Annotated[int, Argument(help="Number of CPUs to use for multiprocessing")] = os.cpu_count()):
+        num_cpu: Annotated[
+            int, Option("-n", "--num-cpu",
+                        help="Number of CPUs to use for multiprocessing")
+        ] = os.cpu_count(),
+        max_gaps: Annotated[
+            int, Option("-g", "--max-gaps",
+                        help="Pairs of profiles with equal or more combined positions are ignored")
+        ] = 301):
     if query == '-':
         query_json: dict[str, Any] = json.loads(sys.stdin.read())
     else:
@@ -252,6 +262,8 @@ def assign(
                                                                         gap_profiles, sts)):
 
             total_gaps = gaps_a + gaps_b + gaps_both
+            if total_gaps >= max_gaps:
+                continue
             # for (distance, st) in results:
             # for reference_profile, st, gap_profile in zip(reference_profiles, sts, gap_profiles):
             if distance < lowest_distance:
@@ -288,13 +300,17 @@ def assign(
         zip([0, 2, 5, 10, 20, 50, 100, 150, 200, 400, 900, 2000, 2600, 2850], best_hit["st"][1])))
 
     print(json.dumps({
-        "library_version": metadata["datestamp"],
-        "closest ST": best_hit["st"][0],
+        "versions": {
+            "hclink": metadata["version"],
+            "library": metadata["datestamp"],
+        },
+        "libraryVersion": metadata["datestamp"],
+        "closestST": best_hit["st"][0],
         "distance": best_hit["distance"],
-        "hierCC_distance": round(hier_cc_distance,2),
-        "gaps_both": best_hit["gaps_both"],
-        "gaps_a": best_hit["gaps_a"],
-        "gaps_b": best_hit["gaps_b"],
+        "hierccDistance": round(hier_cc_distance, 2),
+        "sharedGaps": best_hit["gaps_both"],
+        "queryGaps": best_hit["gaps_a"],
+        "referenceGaps": best_hit["gaps_b"],
         "hierCC": hiercc_code
     }), file=sys.stdout)
 
