@@ -1,7 +1,8 @@
 ARG VERSION
 
-FROM registry.gitlab.com/cgps/pathogenwatch/analyses/hclink:${VERSION}
+# This dockerfile is to help support integration into Pathogenwatch.
 
+FROM registry.gitlab.com/cgps/pathogenwatch/analyses/hclink:${VERSION}
 
 RUN apt update && \
     apt install -y --no-install-recommends curl && \

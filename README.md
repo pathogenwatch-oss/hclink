@@ -25,9 +25,13 @@ from STDIN.
 This software is intended to be distributed within Docker, so the recommended build path is to run the Dockerfile. 
 It will download all required files and dependencies.
 
+Replace `${VERSION}` with the version for reporting in the results.
+Replace `${API_KEY}` with the Enterobase API key.
+
 ```
-> docker build --rm hclink:latest .
+> docker build --build-arg VERSION=${VERSION} --build-arg API_KEY=${API_KEY} --rm hclink:latest .
 ```
+
 
 ## Example output
 ```
