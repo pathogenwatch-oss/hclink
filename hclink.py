@@ -284,30 +284,42 @@ def assign(
                              "gaps_b": gaps_b, "gaps_both": gaps_both})
                         break
 
-    # Select a single best match. For now keep it simple
-    best_hit: dict[str, Any] = best_hits[0]
 
+    # st_index: int = sts.index(best_hit["st"])
     # profile_index: int = sts.index(best_hit["st"])
-    hier_cc_distance: float = calculate_hiercc_distance(
-        best_hit["distance"],
-        best_hit["gaps_a"],
-        best_hit["gaps_b"],
-        best_hit["gaps_both"],
-        len(metadata["family_sizes"]))
+    if best_hits:
+        # Select a single best match. For now keep it simple
+        best_hit = best_hits[0]
+        hiercc_distance: float = calculate_hiercc_distance(
+            best_hit["distance"],
+            best_hit["gaps_a"],
+            best_hit["gaps_b"],
+            best_hit["gaps_both"],
+            len(metadata["family_sizes"]))
 
-    hiercc_code: list[tuple[str, str]] = list(infer_hiercc_code(
-        hier_cc_distance,
-        zip([0, 2, 5, 10, 20, 50, 100, 150, 200, 400, 900, 2000, 2600, 2850], best_hit["st"][1])))
+        hiercc_code: list[tuple[str, str]] = list(infer_hiercc_code(
+            hiercc_distance,
+            zip([0, 2, 5, 10, 20, 50, 100, 150, 200, 400, 900, 2000, 2600, 2850], best_hit["st"][1])))
+    else:
+        best_hit = {
+            "distance": -1,
+            "gaps_a": -1,
+            "gaps_b": -1,
+            "gaps_both": -1,
+            "st": [""],
+
+        }
+        hiercc_code = []
+        hiercc_distance = -1
 
     print(json.dumps({
         "versions": {
             "hclink": metadata["version"],
             "library": metadata["datestamp"],
         },
-        "libraryVersion": metadata["datestamp"],
         "closestST": best_hit["st"][0],
         "distance": best_hit["distance"],
-        "hierccDistance": round(hier_cc_distance, 2),
+        "hierccDistance": round(hiercc_distance, 2),
         "sharedGaps": best_hit["gaps_both"],
         "queryGaps": best_hit["gaps_a"],
         "referenceGaps": best_hit["gaps_b"],
