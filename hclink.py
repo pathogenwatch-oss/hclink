@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import sys
 from datetime import datetime
+from enum import Enum
 from itertools import repeat
 from pathlib import Path
 from typing import Any, Iterable
@@ -19,13 +20,24 @@ from typing_extensions import Annotated
 from lib.db_utils import (download_hiercc_profiles, download_profiles,
                           read_gap_profiles, read_raw_hiercc_profiles, read_reference_profiles)
 
+class Database(Enum):
+    SENTERICA: str = "senterica"
+    ECOLI: str = "ecoli"
+
+
 app = typer.Typer()
+
+schemes = {
+    "senterica": "https://enterobase.warwick.ac.uk/api/v2.0/senterica/cgMLST_v2/sts?scheme=cgMLST_v2",
+    "ecoli": "https://enterobase.warwick.ac.uk/api/v2.0/ecoli/cgMLST/sts?scheme=cgMLST"
+}
 
 
 @app.command()
 def build(
         version: str,
         api_key: str,
+        species: Annotated[Database, typer.Option("-s", "--species")] = "ecoli",
         db_dir: Annotated[
             Path,
             Option("-s", "--downloads", help="Download directory", file_okay=False, dir_okay=True, writable=True,
@@ -35,8 +47,10 @@ def build(
     # Write to sqlite database
     if not db_dir.exists():
         db_dir.mkdir()
+    hiercc_download: Path = download_hiercc_profiles(schemes[species.value], api_key, db_dir)
+    print(f"Downloaded HierCC profiles from '{schemes[species.value]}'", file=sys.stderr)
     profiles_csv: Path = download_profiles(db_dir)
-    hiercc_download: Path = download_hiercc_profiles(api_key, db_dir)
+    print(f"Downloaded profiles from '{profiles_csv}'", file=sys.stderr)
     write_db(version, profiles_csv, hiercc_download)
 
     if clean:

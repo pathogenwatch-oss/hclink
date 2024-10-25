@@ -64,9 +64,9 @@ def download_profiles(data_dir: Path) -> Path:
 
 
 @retry(tries=3, delay=1, backoff=5)
-def fetch_hiercc_batch(api_key: str, offset: int, limit: int) -> tuple[int, dict[str, Any]]:
+def fetch_hiercc_batch(url: str, api_key: str, offset: int, limit: int) -> tuple[int, dict[str, Any]]:
     r = requests.get(
-        f"https://enterobase.warwick.ac.uk/api/v2.0/senterica/cgMLST_v2/sts?limit={limit}&offset={offset}&scheme=cgMLST_v2",
+        f"{url}&limit={limit}&offset={offset}",
         headers={"Authorization": f"Basic {api_key}"}
     )
     if r.status_code != 200:
@@ -76,6 +76,7 @@ def fetch_hiercc_batch(api_key: str, offset: int, limit: int) -> tuple[int, dict
 
 
 def download_hiercc_profiles(
+        url: str,
         api_key: str,
         data_dir: Path = "db",
         limit: int = 10000,
@@ -87,7 +88,7 @@ def download_hiercc_profiles(
         sts = []
         offset: int = 0
         while offset < safety_valve:
-            status, batch = fetch_hiercc_batch(api_key, offset, limit)
+            status, batch = fetch_hiercc_batch(url, api_key, offset, limit)
 
             if batch is None or not batch or not batch["STs"]:
                 break
