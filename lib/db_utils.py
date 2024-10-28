@@ -13,7 +13,7 @@ from typing import Any
 import requests
 from bitarray import bitarray
 from bitarray.util import deserialize
-from retry import retry
+from tenacity import retry, wait_exponential
 
 
 def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> dict[str, list[str]]:
@@ -33,10 +33,8 @@ def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> dict[str, list[str]]
     return processed
 
 
-profiles_url = "https://enterobase.warwick.ac.uk/schemes/Salmonella.cgMLSTv2/profiles.list.gz"
 
-
-def download_profiles(data_dir: Path) -> Path:
+def download_profiles(profiles_url: str, data_dir: Path) -> Path:
     profiles_csv: Path = data_dir / "cgmlst_profiles.csv.gz"
     # if profiles_csv.exists():
     #     return profiles_csv
@@ -63,7 +61,7 @@ def download_profiles(data_dir: Path) -> Path:
     return profiles_csv
 
 
-@retry(tries=3, delay=1, backoff=5)
+@retry(wait=wait_exponential(multiplier=1, min=10, max=7200))
 def fetch_hiercc_batch(url: str, api_key: str, offset: int, limit: int) -> tuple[int, dict[str, Any]]:
     r = requests.get(
         f"{url}&limit={limit}&offset={offset}",
@@ -83,7 +81,7 @@ def download_hiercc_profiles(
         safety_valve: int = 1000000
 ) -> Path:
     out_file = data_dir / "hiercc_profiles.json.gz"
-
+    print(f"Downloading HierCC profiles from '{url}' to {out_file}", file=sys.stderr)
     with gzip.open(out_file, 'wt') as out_fh:
         sts = []
         offset: int = 0

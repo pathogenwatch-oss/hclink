@@ -26,8 +26,9 @@ COPY LICENSE /hclink/LICENSE
 
 ENV API_KEY=${API_KEY}
 ENV VERSION=${VERSION}
+ENV SPECIES=${SPECIES}
 
-RUN python hclink.py build ${VERSION} ${API_KEY} --clean
+RUN python hclink.py build ${VERSION} ${API_KEY} -s ${SPECIES} --clean
 
 ENTRYPOINT ["python", "hclink.py", "assign", "-"]
 

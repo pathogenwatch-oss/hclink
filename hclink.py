@@ -32,6 +32,11 @@ schemes = {
     "ecoli": "https://enterobase.warwick.ac.uk/api/v2.0/ecoli/cgMLST/sts?scheme=cgMLST"
 }
 
+profiles = {
+    "senterica": "https://enterobase.warwick.ac.uk/schemes/Salmonella.cgMLSTv2/profiles.list.gz",
+    "ecoli": "https://enterobase.warwick.ac.uk/schemes/Escherichia.cgMLSTv1/profiles.list.gz"
+}
+
 
 @app.command()
 def build(
@@ -40,16 +45,17 @@ def build(
         species: Annotated[Database, typer.Option("-s", "--species")] = "ecoli",
         db_dir: Annotated[
             Path,
-            Option("-s", "--downloads", help="Download directory", file_okay=False, dir_okay=True, writable=True,
+            Option("-d", "--downloads", help="Download directory", file_okay=False, dir_okay=True, writable=True,
                    readable=True)] = "db",
         clean: bool = False):
     # Need to fetch all profiles from enterobase
     # Write to sqlite database
     if not db_dir.exists():
+        print(f"Creating directory '{db_dir}'", file=sys.stderr)
         db_dir.mkdir()
     hiercc_download: Path = download_hiercc_profiles(schemes[species.value], api_key, db_dir)
     print(f"Downloaded HierCC profiles from '{schemes[species.value]}'", file=sys.stderr)
-    profiles_csv: Path = download_profiles(db_dir)
+    profiles_csv: Path = download_profiles(profiles[species.value], db_dir)
     print(f"Downloaded profiles from '{profiles_csv}'", file=sys.stderr)
     write_db(version, profiles_csv, hiercc_download)
 
@@ -95,18 +101,18 @@ def write_db(
                     if int(row[i]) > family_sizes[i - 1]:
                         family_sizes[i - 1] = int(row[i])
 
-        array_size = sum(family_sizes) + len(family_sizes)
-        gap_slice = len(bitarray(len(family_sizes)).tobytes())
+            array_size = sum(family_sizes) + len(family_sizes)
+            gap_slice = len(bitarray(len(family_sizes)).tobytes())
 
-        with open(path / "metadata.json", 'w') as metadata_fh:
-            print(json.dumps(
-                {
-                    "array_size": array_size,
-                    "family_sizes": family_sizes,
-                    "gap_slice": gap_slice,
-                    "datestamp": str(datetime.now()),
-                    "version": version
-                }), file=metadata_fh)
+    with open(metadata_json, 'w') as metadata_fh:
+        print(json.dumps(
+            {
+                "array_size": array_size,
+                "family_sizes": family_sizes,
+                "gap_slice": gap_slice,
+                "datestamp": str(datetime.now()),
+                "version": version
+            }), file=metadata_fh)
 
     hiercc_profiles: dict[str, list[str]] = read_raw_hiercc_profiles(hiercc_profiles_json)
 
