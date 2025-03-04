@@ -7,6 +7,7 @@ import ssl
 import sys
 import urllib.request
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,56 @@ import requests
 from bitarray import bitarray
 from bitarray.util import deserialize
 from tenacity import retry, wait_exponential
+
+
+def st_info(st: str, hiercc_profile: list[str]) -> str:
+    if int(st) < 0 or len(hiercc_profile) == 0:
+        return f'{st},{",".join([""] * 14)}'
+    else:
+        return f'{st},{",".join(hiercc_profile)}'
+
+
+def convert_to_profile(code, array_size: int, family_sizes: list[int]) -> tuple[bitarray, bitarray]:
+    """
+    Converts a CGMLST code to a pair of bitarrays: one for the profile and one for the gap positions.
+    The bitarray is the length of the total number of alleles across all loci +
+    the size of the scheme. Effectively, the bitarray made up of one bitarray per family. The bit in the sub-arrays is
+    set according the allele code, with the final bit set if it is a novel code. The sub-arrays are joined into a single
+    bitarray.
+
+    :param code:
+    :param array_size:
+    :param family_sizes: list of highest allele ST for each position in the profile
+    :return: (profile_array, gap_array)
+    """
+    code_arr = code.split("_")
+    profile_array = bitarray(array_size)
+    gap_array = bitarray(len(family_sizes))
+    offset = 0
+    for i in range(0, len(code_arr)):
+        if code_arr[i].isnumeric():
+            profile_array[offset + int(code_arr[i]) - 1] = 1
+        elif code_arr[i] != "":
+            profile_array[offset + family_sizes[i]] = 1
+        else:
+            gap_array[i] = 1
+        offset += family_sizes[i] + 1
+    if len(profile_array) != array_size:
+        raise Exception(f"Profile bitarray length {len(profile_array)}!= {array_size}")
+    return profile_array, gap_array
+
+
+def get_species_scheme(species: str, filepath: Path = Path("schemes.json")) -> dict[str, str]:
+    with open(filepath) as f:
+        schemes = json.load(f)
+    if species not in schemes["schemes"]:
+        raise ValueError(f"Species '{species}' not found in schemes.json")
+    return {"scheme": schemes["schemes"].get(species, ""), "profiles": schemes["profiles"].get(species, "")}
+
+
+class Database(Enum):
+    SENTERICA: str = "senterica"
+    ECOLI: str = "ecoli"
 
 
 def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> dict[str, list[str]]:
@@ -31,7 +82,6 @@ def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> dict[str, list[str]]
                     [(int(item[0].replace("d", "")), item[1]) for item in profile["info"]["hierCC"].items()],
                     key=lambda x: x[0]))]
     return processed
-
 
 
 def download_profiles(profiles_url: str, data_dir: Path) -> Path:

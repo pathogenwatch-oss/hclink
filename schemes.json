@@ -1,0 +1,10 @@
+{
+  "schemes": {
+    "senterica": "https://enterobase.warwick.ac.uk/api/v2.0/senterica/cgMLST_v2/sts?scheme=cgMLST_v2",
+    "ecoli": "https://enterobase.warwick.ac.uk/api/v2.0/ecoli/cgMLST/sts?scheme=cgMLST"
+  },
+  "profiles": {
+    "senterica": "https://enterobase.warwick.ac.uk/schemes/Salmonella.cgMLSTv2/profiles.list.gz",
+    "ecoli": "https://enterobase.warwick.ac.uk/schemes/Escherichia.cgMLSTv1/profiles.list.gz"
+  }
+}

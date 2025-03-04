@@ -1,0 +1,18 @@
+[project]
+name = "hclink"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "bitarray>=3.1.0",
+    "requests>=2.32.3",
+    "tenacity>=9.0.0",
+    "typer>=0.15.2",
+]
+
+[project.scripts]
+hclink = "hclink:hclink.app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
