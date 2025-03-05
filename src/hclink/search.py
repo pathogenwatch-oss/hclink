@@ -2,7 +2,7 @@ import lzma
 from typing import Iterable, Iterator
 
 from bitarray import bitarray
-from bitarray.util import count_and, count_xor, sc_decode
+from bitarray.util import count_and, count_xor, deserialize, sc_decode
 
 
 def compare_profiles(
@@ -57,8 +57,27 @@ def infer_hiercc_code(hier_cc_distance: float, hier_cc_map: Iterable[tuple[int, 
             yield formatted_threshold, ""
 
 
-def read_reference_profiles(lengths_db, profile_db) -> Iterator[bytes]:
+def read_profiles(lengths_db, profile_db) -> Iterator[bytes]:
     with open(lengths_db, "r") as lengths_fh, lzma.open(profile_db, "rb") as reference_profiles_fh:
         for index, length_str in enumerate(lengths_fh.readlines()):
             encoded_profile = reference_profiles_fh.read(int(length_str.strip()))
             yield encoded_profile
+
+def read_profiles_list(lengths_db, profile_db) -> list[bytes]:
+    profiles_list: list[bytes] = []
+    with open(lengths_db, "r") as lengths_fh, lzma.open(profile_db, "rb") as reference_profiles_fh:
+        for index, length_str in enumerate(lengths_fh.readlines()):
+            encoded_profile = reference_profiles_fh.read(int(length_str.strip()))
+            profiles_list.append(encoded_profile)
+    return profiles_list
+
+def read_gap_profiles(gap_db, gap_lengths_db, num_families) -> list[bitarray]:
+    gap_profiles: list[bitarray] = []
+    with open(gap_lengths_db, "r") as gap_lengths_fh, lzma.open(gap_db, "rb") as gap_profiles_fh:
+        for index, length_str in enumerate(gap_lengths_fh.readlines()):
+            encoded_profile = gap_profiles_fh.read(int(length_str.strip()))
+            gap_profiles.append(deserialize(encoded_profile))
+            if len(gap_profiles[index]) != num_families:
+                raise Exception(
+                    f"Profile {index} bitarray length {len(gap_profiles[index])} != {num_families}")
+    return gap_profiles

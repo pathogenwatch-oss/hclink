@@ -1,6 +1,5 @@
 import gzip
 import json
-import lzma
 import shutil
 import socket
 import ssl
@@ -13,7 +12,6 @@ from typing import Any
 
 import requests
 from bitarray import bitarray
-from bitarray.util import deserialize
 from tenacity import retry, wait_exponential
 
 
@@ -148,13 +146,3 @@ def download_hiercc_profiles(
     return out_file
 
 
-def read_gap_profiles(gap_db, gap_lengths_db, num_families) -> list[bitarray]:
-    gap_profiles: list[bitarray] = []
-    with open(gap_lengths_db, "r") as gap_lengths_fh, lzma.open(gap_db, "rb") as gap_profiles_fh:
-        for index, length_str in enumerate(gap_lengths_fh.readlines()):
-            encoded_profile = gap_profiles_fh.read(int(length_str.strip()))
-            gap_profiles.append(deserialize(encoded_profile))
-            if len(gap_profiles[index]) != num_families:
-                raise Exception(
-                    f"Profile {index} bitarray length {len(gap_profiles[index])} != {num_families}")
-    return gap_profiles
