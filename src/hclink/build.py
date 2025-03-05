@@ -148,15 +148,6 @@ def download_hiercc_profiles(
     return out_file
 
 
-def read_reference_profiles(lengths_db, profile_db) -> list[bytes]:
-    reference_profiles: list[bytes] = []
-    with open(lengths_db, "r") as lengths_fh, lzma.open(profile_db, "rb") as reference_profiles_fh:
-        for index, length_str in enumerate(lengths_fh.readlines()):
-            encoded_profile = reference_profiles_fh.read(int(length_str.strip()))
-            reference_profiles.append(encoded_profile)
-    return reference_profiles
-
-
 def read_gap_profiles(gap_db, gap_lengths_db, num_families) -> list[bitarray]:
     gap_profiles: list[bitarray] = []
     with open(gap_lengths_db, "r") as gap_lengths_fh, lzma.open(gap_db, "rb") as gap_profiles_fh:

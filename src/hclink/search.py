@@ -1,4 +1,5 @@
-from typing import Iterable
+import lzma
+from typing import Iterable, Iterator
 
 from bitarray import bitarray
 from bitarray.util import count_and, count_xor, sc_decode
@@ -54,3 +55,10 @@ def infer_hiercc_code(hier_cc_distance: float, hier_cc_map: Iterable[tuple[int, 
             yield formatted_threshold, code
         else:
             yield formatted_threshold, ""
+
+
+def read_reference_profiles(lengths_db, profile_db) -> Iterator[bytes]:
+    with open(lengths_db, "r") as lengths_fh, lzma.open(profile_db, "rb") as reference_profiles_fh:
+        for index, length_str in enumerate(lengths_fh.readlines()):
+            encoded_profile = reference_profiles_fh.read(int(length_str.strip()))
+            yield encoded_profile

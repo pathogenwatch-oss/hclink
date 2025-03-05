@@ -18,33 +18,48 @@ from typing_extensions import Annotated
 
 from hclink.build import Database, convert_to_profile, download_hiercc_profiles, download_profiles, get_species_scheme, \
     read_gap_profiles, read_raw_hiercc_profiles, \
-    read_reference_profiles, st_info
-from hclink.search import calculate_hiercc_distance, comparison, infer_hiercc_code
+    st_info
+from hclink.search import calculate_hiercc_distance, comparison, infer_hiercc_code, read_reference_profiles
 
 app = typer.Typer()
 
 
 @app.command()
 def assign(
-        query: Annotated[str, Argument(help="file path of cgMLST JSON or '-' for JSON on STDIN")],
+        query: Annotated[
+            str,
+            Argument(
+                help="file path of cgMLST JSON or '-' for JSON on STDIN"
+            )],
         db: Annotated[
-            Path, Option("-db", "--reference-db",
-                         help="Reference profiles file. CSV of 'sample,ST,HierCC...,encoded profile'",
-                         file_okay=False, dir_okay=True, writable=False,
-                         readable=True)] = "db",
+            Path,
+            Option(
+                "-db",
+                "--reference-db",
+                help="Reference profiles file. CSV of 'sample,ST,HierCC...,encoded profile'",
+                file_okay=False, dir_okay=True, writable=False,
+                readable=True
+            )] = "db",
         num_cpu: Annotated[
-            int, Option("-n", "--num-cpu",
-                        help="Number of CPUs to use for multiprocessing")
-        ] = os.cpu_count(),
+            int,
+            Option(
+                "-n",
+                "--num-cpu",
+                help="Number of CPUs to use for multiprocessing"
+            )] = os.cpu_count(),
         max_gaps: Annotated[
-            int, Option("-g", "--max-gaps",
-                        help="Pairs of profiles with equal or more combined positions are ignored")
-        ] = 301):
+            int,
+            Option(
+                "-g",
+                "--max-gaps",
+                help="Pairs of profiles with equal or more combined gap positions are ignored"
+            )] = 301
+) -> None:
     if query == '-':
-        query_json: dict[str, Any] = json.loads(sys.stdin.read())
+        query_code: str = json.loads(sys.stdin.read())["code"]
     else:
         with open(query) as f:
-            query_json: dict[str, Any] = json.load(f)
+            query_code: str = json.load(f)["code"]
 
     db_path = Path(db)
     scheme_metadata = db_path / "metadata.json"
@@ -57,55 +72,14 @@ def assign(
     with open(scheme_metadata, "r") as scheme_metadata_fh:
         metadata = json.load(scheme_metadata_fh)
 
-    array_size = metadata["array_size"]
-    query_profile: tuple[bitarray, bitarray] = convert_to_profile(query_json["code"], array_size,
+    query_profile: tuple[bitarray, bitarray] = convert_to_profile(query_code,
+                                                                  metadata["array_size"],
                                                                   metadata["family_sizes"])
 
-    gap_profiles: list[bitarray] = read_gap_profiles(
-        gap_db,
-        gap_lengths_db,
-        len(metadata["family_sizes"])
-    )
+    gap_profiles: list[bitarray] = read_gap_profiles(gap_db, gap_lengths_db, len(metadata["family_sizes"]))
 
-    reference_profiles = read_reference_profiles(lengths_db, profile_db)
+    best_hits = starmap_search(gap_profiles, lengths_db, max_gaps, num_cpu, profile_db, query_profile, st_db)
 
-    best_hits: list[dict[str, Any]] = []
-    lowest_distance: int = sys.maxsize
-
-    with (open(st_db, "r") as st_db_fh, multiprocessing.Pool(num_cpu) as pool):
-        sts: list[tuple[str, list[str]]] = []
-        for line in st_db_fh.readlines():
-            info = line.strip().split(",")
-            sts.append((info[0], info[1:]))
-        for distance, gaps_a, gaps_b, gaps_both, st in pool.starmap(comparison,
-                                                                    zip(repeat(query_profile), reference_profiles,
-                                                                        gap_profiles, sts)):
-
-            total_gaps = gaps_a + gaps_b + gaps_both
-            if total_gaps >= max_gaps:
-                continue
-            # for (distance, st) in results:
-            # for reference_profile, st, gap_profile in zip(reference_profiles, sts, gap_profiles):
-            if distance < lowest_distance:
-                best_hits = [
-                    {"st": st, "distance": distance, "gaps_a": gaps_a,
-                     "gaps_b": gaps_b, "gaps_both": gaps_both}]
-                lowest_distance = distance
-            elif distance == lowest_distance:
-                for hit in best_hits:
-                    if total_gaps < hit["gaps_both"] + hit["gaps_a"] + hit["gaps_b"]:
-                        best_hits = [
-                            {"st": st, "distance": distance, "gaps_a": gaps_a,
-                             "gaps_b": gaps_b, "gaps_both": gaps_both}]
-                        break
-                    elif total_gaps == hit["gaps_both"] + hit["gaps_a"] + hit["gaps_b"]:
-                        best_hits.append(
-                            {"st": st, "distance": distance, "gaps_a": gaps_a,
-                             "gaps_b": gaps_b, "gaps_both": gaps_both})
-                        break
-
-    # st_index: int = sts.index(best_hit["st"])
-    # profile_index: int = sts.index(best_hit["st"])
     if best_hits:
         # Select a single best match. For now keep it simple
         best_hit = best_hits[0]
@@ -144,6 +118,44 @@ def assign(
         "referenceGaps": best_hit["gaps_b"],
         "hierCC": hiercc_code
     }), file=sys.stdout)
+
+
+def starmap_search(gap_profiles, lengths_db, max_gaps, num_cpu, profile_db, query_profile, st_db):
+    with (open(st_db, "r") as st_db_fh, multiprocessing.Pool(num_cpu) as pool):
+        sts: list[tuple[str, list[str]]] = []
+        lowest_distance: int = sys.maxsize
+        best_hits: list[dict[str, Any]] = []
+        for line in st_db_fh.readlines():
+            info = line.strip().split(",")
+            sts.append((info[0], info[1:]))
+        for distance, gaps_a, gaps_b, gaps_both, st in pool.starmap(comparison,
+                                                                    zip(repeat(query_profile),
+                                                                        read_reference_profiles(lengths_db, profile_db),
+                                                                        gap_profiles, sts)):
+
+            total_gaps = gaps_a + gaps_b + gaps_both
+            if total_gaps >= max_gaps:
+                continue
+            # for (distance, st) in results:
+            # for reference_profile, st, gap_profile in zip(reference_profiles, sts, gap_profiles):
+            if distance < lowest_distance:
+                best_hits = [
+                    {"st": st, "distance": distance, "gaps_a": gaps_a,
+                     "gaps_b": gaps_b, "gaps_both": gaps_both}]
+                lowest_distance = distance
+            elif distance == lowest_distance:
+                for hit in best_hits:
+                    if total_gaps < hit["gaps_both"] + hit["gaps_a"] + hit["gaps_b"]:
+                        best_hits = [
+                            {"st": st, "distance": distance, "gaps_a": gaps_a,
+                             "gaps_b": gaps_b, "gaps_both": gaps_both}]
+                        break
+                    elif total_gaps == hit["gaps_both"] + hit["gaps_a"] + hit["gaps_b"]:
+                        best_hits.append(
+                            {"st": st, "distance": distance, "gaps_a": gaps_a,
+                             "gaps_b": gaps_b, "gaps_both": gaps_both})
+                        break
+    return best_hits
 
 
 @app.command()
