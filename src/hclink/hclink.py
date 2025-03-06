@@ -14,9 +14,9 @@ from bitarray.util import sc_encode, serialize
 from typer import Argument, Option
 from typing_extensions import Annotated
 
-from build import Database, convert_to_profile, download_hiercc_profiles, download_profiles, get_species_scheme, \
+from hclink.build import Database, convert_to_profile, download_hiercc_profiles, download_profiles, get_species_scheme, \
     read_raw_hiercc_profiles, st_info
-from search import calculate_hiercc_distance, imap_search, infer_hiercc_code, \
+from hclink.search import calculate_hiercc_distance, imap_search, infer_hiercc_code, \
     read_gap_profiles, read_profiles, read_st_info
 
 app = typer.Typer()
