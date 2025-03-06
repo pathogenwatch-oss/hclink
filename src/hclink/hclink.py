@@ -172,17 +172,21 @@ def write_db(
             array_size = sum(family_sizes) + len(family_sizes)
             gap_slice = len(bitarray(len(family_sizes)).tobytes())
 
+    hiercc_profiles_data: tuple[dict[str, list[str]], str, list[int], int] = read_raw_hiercc_profiles(hiercc_profiles_json)
+
     with open(metadata_json, 'w') as metadata_fh:
         print(json.dumps(
             {
                 "array_size": array_size,
                 "family_sizes": family_sizes,
                 "gap_slice": gap_slice,
+                "max_gaps": hiercc_profiles_data[3],
+                "thresholds": hiercc_profiles_data[2],
+                "prepend": hiercc_profiles_data[1],
                 "datestamp": str(datetime.now()),
                 "version": version
             }), file=metadata_fh)
 
-    hiercc_profiles: dict[str, list[str]] = read_raw_hiercc_profiles(hiercc_profiles_json)
 
     with (gzip.open(profiles_csv, 'rt') as in_fh, lzma.open(path / "profiles.xz", 'wb') as profile_out,
           lzma.open(path / "gap_profiles.xz", 'wb') as gap_profile_out,
@@ -207,7 +211,7 @@ def write_db(
             gap_profile_out.write(encoded_gap_profile)
             gap_lengths_fh.write(f"{len(encoded_gap_profile)}\n")
             st = row[0]
-            st_db_out.write(f"{st_info(st, hiercc_profiles.get(st, []))}\n")
+            st_db_out.write(f"{st_info(st, hiercc_profiles_data[0].get(st, []))}\n")
 
 
 if __name__ == "__main__":

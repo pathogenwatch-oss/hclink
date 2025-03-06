@@ -1,5 +1,7 @@
 import gzip
 import json
+import math
+import re
 import shutil
 import socket
 import ssl
@@ -65,27 +67,30 @@ class Database(Enum):
     ECOLI: str = "ecoli"
 
 
-def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> dict[str, list[str]]:
+def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> tuple[dict[str, list[str]], str, list[int], int]:
     with gzip.open(hiercc_profiles_json, "rt") as hiercc_profiles_fh:
         profiles = json.loads(hiercc_profiles_fh.read())
-        processed: dict[str, list[str]] = {}
-        for profile in profiles:
-            if "info" not in profile or "hierCC" not in profile["info"]:
-                continue
-            st = profile["ST_id"]
-            if int(st) < 1:
-                continue
-            processed[st] = [item[1] for item in (
-                sorted(
-                    [(int(item[0].replace("d", "")), item[1]) for item in profile["info"]["hierCC"].items()],
-                    key=lambda x: x[0]))]
-    return processed
+    processed: dict[str, list[str]] = {}
+    first_profile = profiles[0]
+    first_hiercc_key = next(iter(first_profile["info"]["hierCC"].keys()))
+    prepend = re.sub(r'[0-9]+$', '', first_hiercc_key)
+    thresholds: list[int] = sorted([int(key.replace(prepend, '')) for key in first_profile["info"]["hierCC"].keys()])
+    max_gaps = math.floor(len(first_profile["info"]["hierCC"].keys()) / 10) + 1
+    for profile in profiles:
+        if "info" not in profile or "hierCC" not in profile["info"]:
+            continue
+        st = profile["ST_id"]
+        if int(st) < 1:
+            continue
+        processed[st] = [item[1] for item in (
+            sorted(
+                [(int(item[0].replace("d", "")), item[1]) for item in profile["info"]["hierCC"].items()],
+                key=lambda x: x[0]))]
+    return processed, prepend, thresholds, max_gaps
 
 
 def download_profiles(profiles_url: str, data_dir: Path) -> Path:
     profiles_csv: Path = data_dir / "cgmlst_profiles.csv.gz"
-    # if profiles_csv.exists():
-    #     return profiles_csv
     req = urllib.request.Request(
         profiles_url,
         data=None,
@@ -144,5 +149,3 @@ def download_hiercc_profiles(
         out_fh.write(json.dumps(sts))
 
     return out_file
-
-
