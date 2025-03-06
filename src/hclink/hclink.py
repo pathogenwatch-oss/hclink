@@ -2,6 +2,7 @@ import csv
 import gzip
 import json
 import lzma
+import math
 import os
 import sys
 from datetime import datetime
@@ -93,10 +94,10 @@ def assign(
         len(metadata["family_sizes"]))
 
     print(f"Finished task ({datetime.now()})", file=sys.stderr)
-    hiercc_code: list[tuple[str,str ]] = infer_hiercc_code(hiercc_distance,
-                                         metadata["thresholds"],
-                                         best_hit["st"][1],
-                                         metadata["prepend"])
+    hiercc_code: list[tuple[str, str]] = infer_hiercc_code(hiercc_distance,
+                                                           metadata["thresholds"],
+                                                           best_hit["st"][1],
+                                                           metadata["prepend"])
     print(json.dumps({
         "versions": {
             "hclink": metadata["version"],
@@ -159,6 +160,7 @@ def write_db(
             family_sizes = metadata["family_sizes"]
             array_size = metadata["array_size"]
             gap_slice = metadata["gap_slice"]
+            max_gaps = metadata["max_gaps"]
     else:
         with gzip.open(profiles_csv, 'rt') as in_fh:
             reader = csv.reader(in_fh, delimiter='\t')
@@ -171,8 +173,10 @@ def write_db(
 
             array_size = sum(family_sizes) + len(family_sizes)
             gap_slice = len(bitarray(len(family_sizes)).tobytes())
+            max_gaps = math.floor(len(family_sizes) * 0.1) + 1
 
-    hiercc_profiles_data: tuple[dict[str, list[str]], str, list[int], int] = read_raw_hiercc_profiles(hiercc_profiles_json)
+    hiercc_profiles_data: tuple[dict[str, list[str]], str, list[int]] = read_raw_hiercc_profiles(
+        hiercc_profiles_json)
 
     with open(metadata_json, 'w') as metadata_fh:
         print(json.dumps(
@@ -180,13 +184,12 @@ def write_db(
                 "array_size": array_size,
                 "family_sizes": family_sizes,
                 "gap_slice": gap_slice,
-                "max_gaps": hiercc_profiles_data[3],
+                "max_gaps": max_gaps,
                 "thresholds": hiercc_profiles_data[2],
                 "prepend": hiercc_profiles_data[1],
                 "datestamp": str(datetime.now()),
                 "version": version
             }), file=metadata_fh)
-
 
     with (gzip.open(profiles_csv, 'rt') as in_fh, lzma.open(path / "profiles.xz", 'wb') as profile_out,
           lzma.open(path / "gap_profiles.xz", 'wb') as gap_profile_out,

@@ -67,7 +67,7 @@ class Database(Enum):
     ECOLI: str = "ecoli"
 
 
-def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> tuple[dict[str, list[str]], str, list[int], int]:
+def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> tuple[dict[str, list[str]], str, list[int]]:
     with gzip.open(hiercc_profiles_json, "rt") as hiercc_profiles_fh:
         profiles = json.loads(hiercc_profiles_fh.read())
     processed: dict[str, list[str]] = {}
@@ -75,7 +75,6 @@ def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> tuple[dict[str, list
     first_hiercc_key = next(iter(first_profile["info"]["hierCC"].keys()))
     prepend = re.sub(r'[0-9]+$', '', first_hiercc_key)
     thresholds: list[int] = sorted([int(key.replace(prepend, '')) for key in first_profile["info"]["hierCC"].keys()])
-    max_gaps = math.floor(len(first_profile["info"]["hierCC"].keys()) / 10) + 1
     for profile in profiles:
         if "info" not in profile or "hierCC" not in profile["info"]:
             continue
@@ -86,7 +85,7 @@ def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> tuple[dict[str, list
             sorted(
                 [(int(item[0].replace("d", "")), item[1]) for item in profile["info"]["hierCC"].items()],
                 key=lambda x: x[0]))]
-    return processed, prepend, thresholds, max_gaps
+    return processed, prepend, thresholds
 
 
 def download_profiles(profiles_url: str, data_dir: Path) -> Path:

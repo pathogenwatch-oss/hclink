@@ -35,6 +35,9 @@ def comparison(
 
 
 def calculate_hiercc_distance(distance, query_gaps, reference_gaps, shared_gaps, profile_size) -> float:
+    # Distance bigger than profile size (i.e. failed comparison) then just return profile size
+    if distance >= profile_size:
+        return profile_size
     if distance == 0 and query_gaps == 0 and reference_gaps == 0:
         cc_distance = 0.0
     else:
@@ -48,9 +51,13 @@ def calculate_hiercc_distance(distance, query_gaps, reference_gaps, shared_gaps,
     return cc_distance
 
 
-def infer_hiercc_code(hier_cc_distance: float, hiercc_thresholds: list[int], profile: list[str], prepend: str) -> list[
-    tuple[str, str]]:
+def infer_hiercc_code(hier_cc_distance: float,
+                      hiercc_thresholds: list[int],
+                      profile: list[str],
+                      prepend: str) -> list[tuple[str, str]]:
     inferred: list[tuple[str, str]] = []
+    if not profile:
+        profile = [""] * len(hiercc_thresholds)
     if len(profile) != len(hiercc_thresholds):
         raise ValueError(f"The profile length is not the same as the thresholds list ({len(profile)} v{len(hiercc_thresholds)})")
     for index, threshold in enumerate(hiercc_thresholds):
@@ -111,6 +118,16 @@ def imap_search(gap_profiles: Iterator[bitarray],
                 chunksize: int = 10000,
                 threshold: int = sys.maxsize
                 ) -> dict[str, Any]:
+
+    profile_length = sts
+    if query_profile[1].count() >= max_gaps:
+        return {
+            "st": ("",[]),
+            "distance": threshold,
+            "gaps_a": query_profile[1].count(),
+            "gaps_b": -1,
+            "gaps_both": query_profile[1].count(),
+        }
     lowest_distance: int = threshold
     best_hits: list[tuple[str, int, int, int, int]] = []
     query_comparison = partial(comparison, query_profile)
@@ -133,7 +150,7 @@ def imap_search(gap_profiles: Iterator[bitarray],
                     best_hits.append(result)
     if not best_hits:
         return {
-            "st": "",
+            "st": ("",[]),
             "distance": threshold,
             "gaps_a": query_profile[1].count(),
             "gaps_b": -1,
