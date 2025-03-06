@@ -2,14 +2,10 @@ import csv
 import gzip
 import json
 import lzma
-import multiprocessing
 import os
 import sys
 from datetime import datetime
-from functools import partial
-from itertools import repeat
 from pathlib import Path
-from typing import Any, Iterator
 
 import typer
 from bitarray import bitarray
@@ -17,11 +13,10 @@ from bitarray.util import sc_encode, serialize
 from typer import Argument, Option
 from typing_extensions import Annotated
 
-from hclink.build import Database, convert_to_profile, download_hiercc_profiles, download_profiles, get_species_scheme, \
-    read_raw_hiercc_profiles, \
-    st_info
-from hclink.search import calculate_hiercc_distance, comparison, comparison2, infer_hiercc_code, read_gap_profiles, \
-    read_profiles, read_profiles_list
+from build import Database, convert_to_profile, download_hiercc_profiles, download_profiles, get_species_scheme, \
+    read_raw_hiercc_profiles, st_info
+from search import calculate_hiercc_distance, imap_search, infer_hiercc_code, \
+    read_gap_profiles, read_profiles, read_st_info
 
 app = typer.Typer()
 
@@ -57,13 +52,6 @@ def assign(
                 help="Number of profiles to process per batch on each thread"
             )
         ] = 100000,
-        max_gaps: Annotated[
-            int,
-            Option(
-                "-G",
-                "--max-gaps",
-                help="Pairs of profiles with equal or more combined gap positions are ignored"
-            )] = 301
 ) -> None:
     print(f"Starting ({datetime.now()})", file=sys.stderr)
     if query == '-':
@@ -89,36 +77,26 @@ def assign(
                                                                   metadata["array_size"],
                                                                   metadata["family_sizes"])
     print(f"Starting search ({datetime.now()})", file=sys.stderr)
-    best_hits = imap_search(read_gap_profiles(gap_db, gap_lengths_db, len(metadata["family_sizes"])),
-                            read_st_info(st_db), lengths_db, max_gaps, profile_db, query_profile, num_threads,
-                            batch_size)
+    best_hit = imap_search(read_gap_profiles(gap_db, gap_lengths_db, len(metadata["family_sizes"])),
+                           read_st_info(st_db),
+                           read_profiles(lengths_db, profile_db),
+                           metadata["max_gaps"],
+                           query_profile,
+                           num_threads,
+                           batch_size)
     print(f"Finished search ({datetime.now()})", file=sys.stderr)
-    if best_hits:
-        # Select a single best match. For now keep it simple
-        best_hit = best_hits[0]
-        hiercc_distance: float = calculate_hiercc_distance(
-            best_hit["distance"],
-            best_hit["gaps_a"],
-            best_hit["gaps_b"],
-            best_hit["gaps_both"],
-            len(metadata["family_sizes"]))
-
-        hiercc_code: list[tuple[str, str]] = list(infer_hiercc_code(
-            hiercc_distance,
-            zip([0, 2, 5, 10, 20, 50, 100, 150, 200, 400, 900, 2000, 2600, 2850], best_hit["st"][1])))
-    else:
-        best_hit = {
-            "distance": -1,
-            "gaps_a": -1,
-            "gaps_b": -1,
-            "gaps_both": -1,
-            "st": [""],
-
-        }
-        hiercc_code = []
-        hiercc_distance = -1
+    hiercc_distance: float = calculate_hiercc_distance(
+        best_hit["distance"],
+        best_hit["gaps_a"],
+        best_hit["gaps_b"],
+        best_hit["gaps_both"],
+        len(metadata["family_sizes"]))
 
     print(f"Finished task ({datetime.now()})", file=sys.stderr)
+    hiercc_code: list[tuple[str,str ]] = infer_hiercc_code(hiercc_distance,
+                                         metadata["thresholds"],
+                                         best_hit["st"][1],
+                                         metadata["prepend"])
     print(json.dumps({
         "versions": {
             "hclink": metadata["version"],
@@ -132,133 +110,6 @@ def assign(
         "referenceGaps": best_hit["gaps_b"],
         "hierCC": hiercc_code
     }), file=sys.stdout)
-
-
-def read_st_info(st_db) -> Iterator[tuple[str, list[str]]]:
-    with open(st_db, "r") as st_db_fh:
-        for line in st_db_fh.readlines():
-            info = line.strip().split(",")
-            yield info[0], info[1:]
-
-
-def original_simple_search(gap_profiles, lengths_db, max_gaps, num_cpu, profile_db, query_profile, sts):
-    lowest_distance: int = sys.maxsize
-    best_hits: list[dict[str, Any]] = []
-    query_comparison = partial(comparison2(query_profile))
-    for idx, profile in enumerate(read_profiles(lengths_db, profile_db)):
-        distance, gaps_a, gaps_b, gaps_both, st = query_comparison((profile, gap_profiles[idx], sts[idx]))
-        total_gaps = gaps_a + gaps_b + gaps_both
-        if total_gaps >= max_gaps:
-            continue
-        # for (distance, st) in results:
-        # for reference_profile, st, gap_profile in zip(reference_profiles, sts, gap_profiles):
-        if distance < lowest_distance:
-            best_hits = [
-                {"st": st, "distance": distance, "gaps_a": gaps_a,
-                 "gaps_b": gaps_b, "gaps_both": gaps_both}]
-            lowest_distance = distance
-        elif distance == lowest_distance:
-            for hit in best_hits:
-                if total_gaps < hit["gaps_a"] + hit["gaps_b"] + hit["gaps_both"]:
-                    best_hits = [
-                        {"st": st, "distance": distance, "gaps_a": gaps_a,
-                         "gaps_b": gaps_b, "gaps_both": gaps_both}]
-                    break
-                elif total_gaps == hit["gaps_a"] + hit["gaps_b"] + hit["gaps_both"]:
-                    best_hits.append({"st": st, "distance": distance, "gaps_a": gaps_a,
-                                      "gaps_b": gaps_b, "gaps_both": gaps_both})
-                    break
-            else:
-                best_hits.append({"st": st, "distance": distance, "gaps_a": gaps_a,
-                                  "gaps_b": gaps_b, "gaps_both": gaps_both})
-    print(f"Found {len(best_hits)} hits", file=sys.stderr)
-    return best_hits
-
-
-def yield_simple_search(gap_profile_reader: Iterator[bitarray], sts: Iterator[tuple[str, list[str]]], lengths_db,
-                        max_gaps, profile_db, query_profile,
-                        threshold=sys.maxsize, num_cpu=1):
-    lowest_distance: int = threshold
-    best_hits: list[tuple[str, int, int, int, int]] = []
-    query_comparison = partial(comparison, query_profile)
-    for idx, profile in enumerate(read_profiles(lengths_db, profile_db)):
-        result = query_comparison(profile, next(gap_profile_reader), next(sts))
-        total_gaps = result[1] + result[2] + result[3]
-        if total_gaps >= max_gaps:
-            continue
-        if result[0] < lowest_distance:
-            best_hits.append(result)
-            lowest_distance = result[0]
-        elif result[0] == lowest_distance:
-            if total_gaps < best_hits[-1][1] + best_hits[-1][2] + best_hits[-1][3]:
-                best_hits.append(result)
-    return [
-        {"st": best_hits[-1][4], "distance": best_hits[-1][0], "gaps_a": best_hits[-1][1], "gaps_b": best_hits[-1][2],
-         "gaps_both": best_hits[-1][3]}]
-
-
-def imap_search(gap_profile_reader: Iterator[bitarray], sts: Iterator[tuple[str, list[str]]], lengths_db: Path,
-                max_gaps: int, profile_db, query_profile, num_cpu: int = 1, chunksize: int = 10000,
-                threshold: int = sys.maxsize):
-    lowest_distance: int = threshold
-    best_hits: list[tuple[str, int, int, int, int]] = []
-    query_comparison = partial(comparison2, query_profile)
-
-    print(f"Using {num_cpu} CPU cores", file=sys.stderr)
-    with multiprocessing.Pool(num_cpu) as pool:
-        for result in pool.imap_unordered(query_comparison,
-                                          zip(read_profiles(lengths_db, profile_db),
-                                              gap_profile_reader,
-                                              sts),
-                                          chunksize=chunksize):
-            total_gaps = result[1] + result[2] + result[3]
-            if total_gaps >= max_gaps:
-                continue
-            if result[0] < lowest_distance:
-                best_hits.append(result)
-                lowest_distance = result[0]
-            elif result[0] == lowest_distance:
-                if total_gaps < best_hits[-1][1] + best_hits[-1][2] + best_hits[-1][3]:
-                    best_hits.append(result)
-    return [
-        {"st": best_hits[-1][4], "distance": best_hits[-1][0], "gaps_a": best_hits[-1][1], "gaps_b": best_hits[-1][2],
-         "gaps_both": best_hits[-1][3]}]
-
-
-def starmap_search(gap_profile_reader: Iterator[bitarray], sts: Iterator[tuple[str, list[str]]], lengths_db,
-                   max_gaps: int, profile_db, query_profile, num_threads: int = 1, chunksize: int = 10000,
-                   threshold: int = sys.maxsize):
-    with multiprocessing.Pool(num_threads) as pool:
-        lowest_distance: int = threshold
-        best_hits: list[dict[str, Any]] = []
-        for distance, gaps_a, gaps_b, gaps_both, st in pool.starmap(comparison,
-                                                                    zip(repeat(query_profile),
-                                                                        read_profiles_list(lengths_db, profile_db),
-                                                                        gap_profile_reader, sts)):
-
-            total_gaps = gaps_a + gaps_b + gaps_both
-            if total_gaps >= max_gaps:
-                continue
-            # for (distance, st) in results:
-            # for reference_profile, st, gap_profile in zip(reference_profiles, sts, gap_profiles):
-            if distance < lowest_distance:
-                best_hits = [
-                    {"st": st, "distance": distance, "gaps_a": gaps_a,
-                     "gaps_b": gaps_b, "gaps_both": gaps_both}]
-                lowest_distance = distance
-            elif distance == lowest_distance:
-                for hit in best_hits:
-                    if total_gaps < hit["gaps_both"] + hit["gaps_a"] + hit["gaps_b"]:
-                        best_hits = [
-                            {"st": st, "distance": distance, "gaps_a": gaps_a,
-                             "gaps_b": gaps_b, "gaps_both": gaps_both}]
-                        break
-                    elif total_gaps == hit["gaps_both"] + hit["gaps_a"] + hit["gaps_b"]:
-                        best_hits.append(
-                            {"st": st, "distance": distance, "gaps_a": gaps_a,
-                             "gaps_b": gaps_b, "gaps_both": gaps_both})
-                        break
-    return best_hits
 
 
 @app.command()
