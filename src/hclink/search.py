@@ -119,7 +119,6 @@ def imap_search(gap_profiles: Iterator[bitarray],
                 threshold: int = sys.maxsize
                 ) -> dict[str, Any]:
 
-    profile_length = sts
     if query_profile[1].count() >= max_gaps:
         return {
             "st": ("",[]),
