@@ -86,15 +86,15 @@ def assign(
                            num_threads,
                            batch_size)
     print(f"Finished search ({datetime.now()})", file=sys.stderr)
-    hiercc_distance: float = calculate_hiercc_distance(
-        best_hit["distance"],
-        best_hit["gaps_a"],
-        best_hit["gaps_b"],
-        best_hit["gaps_both"],
-        len(metadata["family_sizes"]))
+    # hiercc_distance: float = calculate_hiercc_distance(
+    #     best_hit["distance"],
+    #     best_hit["gaps_a"],
+    #     best_hit["gaps_b"],
+    #     best_hit["gaps_both"],
+    #     len(metadata["family_sizes"]))
 
     print(f"Finished task ({datetime.now()})", file=sys.stderr)
-    hiercc_code: list[tuple[str, str]] = infer_hiercc_code(hiercc_distance,
+    hiercc_code: list[tuple[str, str]] = infer_hiercc_code(best_hit["hiercc_distance"],
                                                            metadata["thresholds"],
                                                            best_hit["st"][1],
                                                            metadata["prepend"])
@@ -105,7 +105,7 @@ def assign(
         },
         "closestST": best_hit["st"][0],
         "distance": best_hit["distance"],
-        "hierccDistance": round(hiercc_distance, 2),
+        "hierccDistance": round(best_hit["hiercc_distance"], 2),
         "sharedGaps": best_hit["gaps_both"],
         "queryGaps": best_hit["gaps_a"],
         "referenceGaps": best_hit["gaps_b"],

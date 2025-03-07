@@ -7,8 +7,10 @@ from typing import Any, Iterator
 
 from bitarray import bitarray
 from bitarray.util import count_and, count_xor, deserialize, sc_decode
+from numba import float32, int32, jit, types
 
 
+# @jit(forceobj=True)
 def compare_profiles(
         profile_a: tuple[bitarray, bitarray],
         profile_b: tuple[bitarray, bitarray]
@@ -30,24 +32,41 @@ def comparison(
         reference,
 ):
     profile = sc_decode(reference[0])
-    distance, gaps_a, gaps_b, gaps_both = compare_profiles(query_profile, (profile, reference[1]))
-    return distance, gaps_a, gaps_b, gaps_both, reference[2]
+    shared_gaps: int = count_and(query_profile[1], reference[1])
+    profile_a_gaps: int = query_profile[1].count()
+    profile_b_gaps: int = reference[1].count()
+    bit_distance = count_xor(query_profile[0], profile)
+    raw_distance, gaps_a, gaps_b = compiled_compare(bit_distance, shared_gaps, profile_a_gaps, profile_b_gaps)
+    hiercc_distance = calculate_hiercc_distance(raw_distance, gaps_a, gaps_b, shared_gaps, len(query_profile[1]))
+    return hiercc_distance, raw_distance, gaps_a, gaps_b, shared_gaps, reference[2]
+    # distance, gaps_a, gaps_b, gaps_both = compare_profiles(query_profile, (profile, reference[1]))
+    # return distance, gaps_a, gaps_b, gaps_both, reference[2]
 
 
-def calculate_hiercc_distance(distance, query_gaps, reference_gaps, shared_gaps, profile_size) -> float:
+@jit(types.Tuple((int32, int32, int32))(int32, int32, int32, int32), nopython=True, nogil=True)
+def compiled_compare(distance, shared_gaps, profilea_gaps, profileb_gaps) -> tuple[int, int, int]:
+    gaps_a: int = profilea_gaps - shared_gaps
+    gaps_b: int = profileb_gaps - shared_gaps
+    gap_adjust: int = gaps_a + gaps_b
+    return int((distance - gap_adjust) / 2), gaps_a, gaps_b
+
+
+@jit(float32(int32, int32, int32, int32, int32), nopython=True, nogil=True)
+def calculate_hiercc_distance(distance: int, query_gaps: int, reference_gaps: int, shared_gaps: int,
+                              profile_size: int) -> float:
     # Distance bigger than profile size (i.e. failed comparison) then just return profile size
     if distance >= profile_size:
-        return profile_size
+        return float(profile_size)
     if distance == 0 and query_gaps == 0 and reference_gaps == 0:
         cc_distance = 0.0
     else:
-        query_core = (profile_size - query_gaps - shared_gaps) - 0.03 * profile_size
+        query_core = float(profile_size - query_gaps - shared_gaps) - 0.03 * float(profile_size)
         # if query core is > s use equation 1, else use equation 2
-        common_core = profile_size - query_gaps - reference_gaps - shared_gaps
+        common_core = float(profile_size - query_gaps - reference_gaps - shared_gaps)
         if common_core >= query_core:
-            cc_distance = (profile_size * distance) / common_core + 0.5
+            cc_distance = (float(profile_size) * float(distance)) / common_core + 0.5
         else:
-            cc_distance = ((profile_size * (distance + query_core - common_core)) / query_core) + 0.5
+            cc_distance = ((float(profile_size) * float(distance + query_core - common_core)) / query_core) + 0.5
     return cc_distance
 
 
@@ -59,7 +78,8 @@ def infer_hiercc_code(hier_cc_distance: float,
     if not profile:
         profile = [""] * len(hiercc_thresholds)
     if len(profile) != len(hiercc_thresholds):
-        raise ValueError(f"The profile length is not the same as the thresholds list ({len(profile)} v{len(hiercc_thresholds)})")
+        raise ValueError(
+            f"The profile length is not the same as the thresholds list ({len(profile)} v{len(hiercc_thresholds)})")
     for index, threshold in enumerate(hiercc_thresholds):
         inferred.append((f"{prepend}{threshold}", (profile[index] if hier_cc_distance <= threshold else "")))
     return inferred
@@ -118,10 +138,9 @@ def imap_search(gap_profiles: Iterator[bitarray],
                 chunksize: int = 10000,
                 threshold: int = sys.maxsize
                 ) -> dict[str, Any]:
-
     if query_profile[1].count() >= max_gaps:
         return {
-            "st": ("",[]),
+            "st": ("", []),
             "distance": threshold,
             "gaps_a": query_profile[1].count(),
             "gaps_b": -1,
@@ -138,26 +157,28 @@ def imap_search(gap_profiles: Iterator[bitarray],
                                               gap_profiles,
                                               sts),
                                           chunksize=chunksize):
-            total_gaps = result[1] + result[2] + result[3]
+            total_gaps = result[2] + result[3] + result[4]
             if total_gaps >= max_gaps:
                 continue
             if result[0] < lowest_distance:
                 best_hits.append(result)
                 lowest_distance = result[0]
             elif result[0] == lowest_distance:
-                if total_gaps < best_hits[-1][1] + best_hits[-1][2] + best_hits[-1][3]:
+                if total_gaps < best_hits[-1][2] + best_hits[-1][3] + best_hits[-1][4]:
                     best_hits.append(result)
     if not best_hits:
         return {
-            "st": ("",[]),
+            "st": ("", []),
             "distance": threshold,
             "gaps_a": query_profile[1].count(),
             "gaps_b": -1,
             "gaps_both": query_profile[1].count(),
         }
     return {
-        "st": best_hits[-1][4],
-        "distance": best_hits[-1][0],
-        "gaps_a": best_hits[-1][1],
-        "gaps_b": best_hits[-1][2],
-        "gaps_both": best_hits[-1][3]}
+        "st": best_hits[-1][5],
+        "hiercc_distance": best_hits[-1][0],
+        "distance": best_hits[-1][1],
+        "gaps_a": best_hits[-1][2],
+        "gaps_b": best_hits[-1][3],
+        "gaps_both": best_hits[-1][4]
+    }
