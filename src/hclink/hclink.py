@@ -52,7 +52,7 @@ def assign(
                 "--batch-size",
                 help="Number of profiles to process per batch on each thread"
             )
-        ] = 100000,
+        ] = 1000,
 ) -> None:
     print(f"Starting ({datetime.now()})", file=sys.stderr)
     if query == '-':
