@@ -6,18 +6,19 @@ import math
 import os
 import sys
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import typer
 from bitarray import bitarray
-from bitarray.util import sc_encode, serialize
+from bitarray.util import deserialize, sc_decode, sc_encode, serialize
 from typer import Argument, Option
 from typing_extensions import Annotated
 
 from hclink.build import Database, convert_to_profile, download_hiercc_profiles, download_profiles, get_species_scheme, \
     read_raw_hiercc_profiles, st_info
-from hclink.search import calculate_hiercc_distance, imap_search, infer_hiercc_code, \
-    read_gap_profiles, read_profiles, read_st_info
+from hclink.search import imap_search, infer_hiercc_code
+from hclink.store import read_bitmaps, write_bitmap_to_filehandle, read_st_info
 
 app = typer.Typer()
 
@@ -64,10 +65,8 @@ def assign(
     db_path = Path(db)
     scheme_metadata: Path = db_path / "metadata.json"
     profile_db: Path = db_path / "profiles.xz"
-    lengths_db: Path = db_path / "profile_lengths.txt"
     gap_db: Path = db_path / "gap_profiles.xz"
-    gap_lengths_db: Path = db_path / "gap_lengths.txt"
-    st_db: Path = db_path / "ST.txt"
+    st_db: Path = db_path / "ST.txt.xz"
 
     print(f"Reading metadata from {scheme_metadata} ({datetime.now()})", file=sys.stderr)
     with open(scheme_metadata, "r") as scheme_metadata_fh:
@@ -78,9 +77,9 @@ def assign(
                                                                   metadata["array_size"],
                                                                   metadata["family_sizes"])
     print(f"Starting search ({datetime.now()})", file=sys.stderr)
-    best_hit = imap_search(read_gap_profiles(gap_db, gap_lengths_db, len(metadata["family_sizes"])),
+    best_hit = imap_search(read_bitmaps(gap_db),
                            read_st_info(st_db),
-                           read_profiles(lengths_db, profile_db),
+                           read_bitmaps(profile_db),
                            metadata["max_gaps"],
                            query_profile,
                            num_threads,
@@ -159,7 +158,6 @@ def write_db(
             metadata = json.load(metadata_fh)
             family_sizes = metadata["family_sizes"]
             array_size = metadata["array_size"]
-            gap_slice = metadata["gap_slice"]
             max_gaps = metadata["max_gaps"]
     else:
         with gzip.open(profiles_csv, 'rt') as in_fh:
@@ -172,7 +170,6 @@ def write_db(
                         family_sizes[i - 1] = int(row[i])
 
             array_size = sum(family_sizes) + len(family_sizes)
-            gap_slice = len(bitarray(len(family_sizes)).tobytes())
             max_gaps = math.floor(len(family_sizes) * 0.1) + 1
 
     hiercc_profiles_data: tuple[dict[str, list[str]], str, list[int]] = read_raw_hiercc_profiles(
@@ -183,7 +180,6 @@ def write_db(
             {
                 "array_size": array_size,
                 "family_sizes": family_sizes,
-                "gap_slice": gap_slice,
                 "max_gaps": max_gaps,
                 "thresholds": hiercc_profiles_data[2],
                 "prepend": hiercc_profiles_data[1],
@@ -193,11 +189,11 @@ def write_db(
 
     with (gzip.open(profiles_csv, 'rt') as in_fh, lzma.open(path / "profiles.xz", 'wb') as profile_out,
           lzma.open(path / "gap_profiles.xz", 'wb') as gap_profile_out,
-          open(path / "profile_lengths.txt", "w") as lengths_fh,
-          open(path / "gap_lengths.txt", "w") as gap_lengths_fh,
-          open(path / "ST.txt", "w") as st_db_out):
+          lzma.open(path / "ST.txt.xz", "wb") as st_db_out):
         reader = csv.reader(in_fh, delimiter="\t")
         next(reader)  # Skip header
+        store_profile = partial(write_bitmap_to_filehandle, profile_out, sc_encode)
+        store_gaps = partial(write_bitmap_to_filehandle, gap_profile_out, serialize)
         for row in reader:
             code = "_".join([value if value != "0" else "" for value in row[1:]])
             profile, gap_profile = convert_to_profile(code,
@@ -205,16 +201,12 @@ def write_db(
                                                       family_sizes)
             if len(profile) != array_size:
                 raise Exception(f"Profile bitarray length {len(profile)}!= {array_size}")
-            if len(gap_profile.tobytes()) != gap_slice:
-                raise Exception(f"Gap profile bytes length {len(gap_profile.tobytes())}!= {gap_slice}")
-            encoded_profile = sc_encode(profile)
-            profile_out.write(encoded_profile)
-            lengths_fh.write(f"{len(encoded_profile)}\n")
-            encoded_gap_profile = serialize(gap_profile)
-            gap_profile_out.write(encoded_gap_profile)
-            gap_lengths_fh.write(f"{len(encoded_gap_profile)}\n")
+            if len(gap_profile) != len(family_sizes):
+                raise Exception(f"Gap profile bytes length {len(gap_profile)}!= {len(family_sizes)}")
+            store_profile(profile)
+            store_gaps(gap_profile)
             st = row[0]
-            st_db_out.write(f"{st_info(st, hiercc_profiles_data[0].get(st, []))}\n")
+            st_db_out.write(f"{st_info(st, hiercc_profiles_data[0].get(st, []))}\n".encode("utf-8"))
 
 
 if __name__ == "__main__":

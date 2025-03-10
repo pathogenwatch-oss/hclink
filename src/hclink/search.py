@@ -1,8 +1,6 @@
-import lzma
 import multiprocessing
 import sys
 from functools import partial
-from pathlib import Path
 from typing import Any, Iterator
 
 from bitarray import bitarray
@@ -32,9 +30,11 @@ def comparison(
         reference,
 ):
     profile = sc_decode(reference[0])
-    shared_gaps: int = count_and(query_profile[1], reference[1])
+    gaps = deserialize(reference[1])
+
+    shared_gaps: int = count_and(query_profile[1], gaps)
     profile_a_gaps: int = query_profile[1].count()
-    profile_b_gaps: int = reference[1].count()
+    profile_b_gaps: int = gaps.count()
     bit_distance = count_xor(query_profile[0], profile)
     raw_distance, gaps_a, gaps_b = compiled_compare(bit_distance, shared_gaps, profile_a_gaps, profile_b_gaps)
     hiercc_distance = calculate_hiercc_distance(raw_distance, gaps_a, gaps_b, shared_gaps, len(query_profile[1]))
@@ -44,9 +44,9 @@ def comparison(
 
 
 @jit(types.Tuple((int32, int32, int32))(int32, int32, int32, int32), nopython=True, nogil=True)
-def compiled_compare(distance, shared_gaps, profilea_gaps, profileb_gaps) -> tuple[int, int, int]:
-    gaps_a: int = profilea_gaps - shared_gaps
-    gaps_b: int = profileb_gaps - shared_gaps
+def compiled_compare(distance, shared_gaps, profile_a_gaps, profile_b_gaps) -> tuple[int, int, int]:
+    gaps_a: int = profile_a_gaps - shared_gaps
+    gaps_b: int = profile_b_gaps - shared_gaps
     gap_adjust: int = gaps_a + gaps_b
     return int((distance - gap_adjust) / 2), gaps_a, gaps_b
 
@@ -85,51 +85,7 @@ def infer_hiercc_code(hier_cc_distance: float,
     return inferred
 
 
-def read_profiles(lengths_db: Path, profile_db: Path) -> Iterator[bytes]:
-    with open(lengths_db, "r") as lengths_fh, lzma.open(profile_db, "rb") as reference_profiles_fh:
-        for length_str in lengths_fh.readlines():
-            encoded_profile = reference_profiles_fh.read(int(length_str.strip()))
-            yield encoded_profile
-
-
-def read_profiles_list(lengths_db, profile_db) -> list[bytes]:
-    profiles_list: list[bytes] = []
-    with open(lengths_db, "r") as lengths_fh, lzma.open(profile_db, "rb") as reference_profiles_fh:
-        for index, length_str in enumerate(lengths_fh.readlines()):
-            encoded_profile = reference_profiles_fh.read(int(length_str.strip()))
-            profiles_list.append(encoded_profile)
-    return profiles_list
-
-
-def read_gap_profiles(gap_db: Path, gap_lengths_db, num_families) -> Iterator[bitarray]:
-    with open(gap_lengths_db, "r") as gap_lengths_fh, lzma.open(gap_db, "rb") as gap_profiles_fh:
-        for index, length_str in enumerate(gap_lengths_fh.readlines()):
-            encoded_profile = gap_profiles_fh.read(int(length_str.strip()))
-            yield deserialize(encoded_profile)
-            if len(deserialize(encoded_profile)) != num_families:
-                raise Exception(f"Profile {index} bitarray length {len(deserialize(encoded_profile))}!= {num_families}")
-
-
-def read_gap_profiles_list(gap_db, gap_lengths_db, num_families) -> list[bitarray]:
-    gap_profiles: list[bitarray] = []
-    with open(gap_lengths_db, "r") as gap_lengths_fh, lzma.open(gap_db, "rb") as gap_profiles_fh:
-        for index, length_str in enumerate(gap_lengths_fh.readlines()):
-            encoded_profile = gap_profiles_fh.read(int(length_str.strip()))
-            gap_profiles.append(deserialize(encoded_profile))
-            if len(gap_profiles[index]) != num_families:
-                raise Exception(
-                    f"Profile {index} bitarray length {len(gap_profiles[index])} != {num_families}")
-    return gap_profiles
-
-
-def read_st_info(st_db) -> Iterator[tuple[str, list[str]]]:
-    with open(st_db, "r") as st_db_fh:
-        for line in st_db_fh.readlines():
-            info = line.strip().split(",")
-            yield info[0], info[1:]
-
-
-def imap_search(gap_profiles: Iterator[bitarray],
+def imap_search(gap_profiles: Iterator[bytes],
                 sts: Iterator[tuple[str, list[str]]],
                 profiles: Iterator[bytes],
                 max_gaps: int,

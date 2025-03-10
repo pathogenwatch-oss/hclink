@@ -1,6 +1,5 @@
 import gzip
 import json
-import math
 import re
 import shutil
 import socket
