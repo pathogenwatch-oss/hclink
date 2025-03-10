@@ -1,7 +1,7 @@
 import multiprocessing
 import sys
 from functools import partial
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from bitarray import bitarray
 from bitarray.util import count_and, count_xor, deserialize, sc_decode
@@ -27,24 +27,22 @@ def compare_profiles(
 
 def comparison(
         query_profile: tuple[bitarray, bitarray],
-        reference,
-):
+        reference: tuple[bytes, bytes, str],
+) -> tuple[float, int, int, int, int, str]:
     profile = sc_decode(reference[0])
     gaps = deserialize(reference[1])
 
     shared_gaps: int = count_and(query_profile[1], gaps)
     profile_a_gaps: int = query_profile[1].count()
     profile_b_gaps: int = gaps.count()
-    bit_distance = count_xor(query_profile[0], profile)
+    bit_distance: int = count_xor(query_profile[0], profile)
     raw_distance, gaps_a, gaps_b = compiled_compare(bit_distance, shared_gaps, profile_a_gaps, profile_b_gaps)
     hiercc_distance = calculate_hiercc_distance(raw_distance, gaps_a, gaps_b, shared_gaps, len(query_profile[1]))
     return hiercc_distance, raw_distance, gaps_a, gaps_b, shared_gaps, reference[2]
-    # distance, gaps_a, gaps_b, gaps_both = compare_profiles(query_profile, (profile, reference[1]))
-    # return distance, gaps_a, gaps_b, gaps_both, reference[2]
 
 
 @jit(types.Tuple((int32, int32, int32))(int32, int32, int32, int32), nopython=True, nogil=True)
-def compiled_compare(distance, shared_gaps, profile_a_gaps, profile_b_gaps) -> tuple[int, int, int]:
+def compiled_compare(distance:int, shared_gaps: int, profile_a_gaps: int, profile_b_gaps: int) -> tuple[int, int, int]:
     gaps_a: int = profile_a_gaps - shared_gaps
     gaps_b: int = profile_b_gaps - shared_gaps
     gap_adjust: int = gaps_a + gaps_b
@@ -58,15 +56,15 @@ def calculate_hiercc_distance(distance: int, query_gaps: int, reference_gaps: in
     if distance >= profile_size:
         return float(profile_size)
     if distance == 0 and query_gaps == 0 and reference_gaps == 0:
-        cc_distance = 0.0
+        cc_distance: float = 0.0
     else:
-        query_core = float(profile_size - query_gaps - shared_gaps) - 0.03 * float(profile_size)
+        query_core: float = float(profile_size - query_gaps - shared_gaps) - 0.03 * float(profile_size)
         # if query core is > s use equation 1, else use equation 2
-        common_core = float(profile_size - query_gaps - reference_gaps - shared_gaps)
+        common_core: float = float(profile_size - query_gaps - reference_gaps - shared_gaps)
         if common_core >= query_core:
-            cc_distance = (float(profile_size) * float(distance)) / common_core + 0.5
+            cc_distance: float = (float(profile_size) * float(distance)) / common_core + 0.5
         else:
-            cc_distance = ((float(profile_size) * float(distance + query_core - common_core)) / query_core) + 0.5
+            cc_distance: float = ((float(profile_size) * float(distance + query_core - common_core)) / query_core) + 0.5
     return cc_distance
 
 
@@ -104,6 +102,7 @@ def imap_search(gap_profiles: Iterator[bytes],
         }
     lowest_distance: int = threshold
     best_hits: list[tuple[str, int, int, int, int]] = []
+
     query_comparison = partial(comparison, query_profile)
 
     print(f"Using {num_cpu} CPU cores", file=sys.stderr)
@@ -113,7 +112,7 @@ def imap_search(gap_profiles: Iterator[bytes],
                                               gap_profiles,
                                               sts),
                                           chunksize=chunksize):
-            total_gaps = result[2] + result[3] + result[4]
+            total_gaps: int = result[2] + result[3] + result[4]
             if total_gaps >= max_gaps:
                 continue
             if result[0] < lowest_distance:
