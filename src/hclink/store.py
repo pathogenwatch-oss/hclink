@@ -64,5 +64,6 @@ def finalise_db(db):
     db.commit()
     cursor.close()
 
-def lookup_st(cursor, st, position) -> str:
-    return next(cursor.execute(f"SELECT code FROM alleles WHERE checksum =? AND position =?", (st, position)), None)
+def lookup_st(cursor, st, position) -> int:
+    result = next(cursor.execute("SELECT code FROM alleles WHERE checksum =? AND position =?", (st, position)), None)
+    return result[0] if result is not None else None
