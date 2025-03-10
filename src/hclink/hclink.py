@@ -5,11 +5,13 @@ import lzma
 import math
 import os
 import shutil
+import sqlite3
 import sys
 from datetime import datetime
 from enum import Enum
 from functools import partial
 from pathlib import Path
+from typing import Callable
 
 import typer
 from bitarray import bitarray
@@ -76,9 +78,9 @@ def assign(
         metadata = json.load(scheme_metadata_fh)
 
     print(f"Converting profile ({datetime.now()})", file=sys.stderr)
-    db = connect_db(allele_db_path)
-    cursor = db.cursor()
-    lookup = partial(lookup_st, cursor)
+    db = connect_db(str(allele_db_path))
+    cursor: sqlite3.Cursor = db.cursor()
+    lookup: Callable[[str, int], int] = partial(lookup_st, cursor)
     query_profile: tuple[bitarray, bitarray] = convert_to_profile(query_code,
                                                                   metadata["array_size"],
                                                                   metadata["family_sizes"],
