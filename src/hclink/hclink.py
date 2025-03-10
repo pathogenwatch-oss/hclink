@@ -86,7 +86,7 @@ def assign(
                                                                   metadata["family_sizes"],
                                                                   lookup)
     print(f"Starting search ({datetime.now()})", file=sys.stderr)
-    best_hit = imap_search(read_bitmaps(gap_db),
+    best_hit: dict[str, Any] = imap_search(read_bitmaps(gap_db),
                            read_st_info(st_db),
                            read_bitmaps(profile_db),
                            metadata["max_gaps"],
@@ -146,8 +146,6 @@ def build(
     print(f"Downloaded HierCC profiles from '{scheme_info["scheme"]}'", file=sys.stderr)
     profiles_csv: Path = download_profiles(scheme_info["downloads"], db_dir)
     print(f"Downloaded profiles from '{profiles_csv}'", file=sys.stderr)
-    profiles_csv = db_dir / "cgmlst_profiles.csv.gz"
-    hiercc_download: Path = db_dir / "hiercc_profiles.json.gz"
     genes: list[str] = extract_genes(profiles_csv)
     alleles_dir: Path = download_alleles(scheme_info["downloads"], genes, db_dir)
     write_db(version, profiles_csv, hiercc_download, db_dir)
