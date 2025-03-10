@@ -4,21 +4,23 @@ import json
 import lzma
 import math
 import os
+import shutil
 import sys
 from datetime import datetime
+from enum import Enum
 from functools import partial
 from pathlib import Path
 
 import typer
 from bitarray import bitarray
-from bitarray.util import deserialize, sc_decode, sc_encode, serialize
+from bitarray.util import sc_encode, serialize
 from typer import Argument, Option
 from typing_extensions import Annotated
 
-from hclink.build import Database, convert_to_profile, download_hiercc_profiles, download_profiles, get_species_scheme, \
-    read_raw_hiercc_profiles, st_info
 from hclink.search import imap_search, infer_hiercc_code
-from hclink.store import read_bitmaps, write_bitmap_to_filehandle, read_st_info
+from hclink.store import connect_db, lookup_st, read_bitmaps, read_st_info, write_bitmap_to_filehandle
+from hclink.build import convert_to_profile, create_allele_db, download_alleles, download_hiercc_profiles, \
+    download_profiles, get_species_scheme, read_raw_hiercc_profiles, st_info
 
 app = typer.Typer()
 
@@ -66,6 +68,7 @@ def assign(
     scheme_metadata: Path = db_path / "metadata.json"
     profile_db: Path = db_path / "profiles.xz"
     gap_db: Path = db_path / "gap_profiles.xz"
+    allele_db_path: Path = db_path / "alleles.db"
     st_db: Path = db_path / "ST.txt.xz"
 
     print(f"Reading metadata from {scheme_metadata} ({datetime.now()})", file=sys.stderr)
@@ -73,9 +76,13 @@ def assign(
         metadata = json.load(scheme_metadata_fh)
 
     print(f"Converting profile ({datetime.now()})", file=sys.stderr)
+    db = connect_db(allele_db_path)
+    cursor = db.cursor()
+    lookup = partial(lookup_st, cursor)
     query_profile: tuple[bitarray, bitarray] = convert_to_profile(query_code,
                                                                   metadata["array_size"],
-                                                                  metadata["family_sizes"])
+                                                                  metadata["family_sizes"],
+                                                                  lookup)
     print(f"Starting search ({datetime.now()})", file=sys.stderr)
     best_hit = imap_search(read_bitmaps(gap_db),
                            read_st_info(st_db),
@@ -85,12 +92,7 @@ def assign(
                            num_threads,
                            batch_size)
     print(f"Finished search ({datetime.now()})", file=sys.stderr)
-    # hiercc_distance: float = calculate_hiercc_distance(
-    #     best_hit["distance"],
-    #     best_hit["gaps_a"],
-    #     best_hit["gaps_b"],
-    #     best_hit["gaps_both"],
-    #     len(metadata["family_sizes"]))
+
 
     print(f"Finished task ({datetime.now()})", file=sys.stderr)
     hiercc_code: list[tuple[str, str]] = infer_hiercc_code(best_hit["hiercc_distance"],
@@ -112,6 +114,18 @@ def assign(
     }), file=sys.stdout)
 
 
+def extract_genes(profiles_csv):
+    with gzip.open(profiles_csv, "rt") as profiles_fh:
+        reader = csv.reader(profiles_fh, delimiter='\t')
+        header = next(reader)
+        return header[1:]
+
+
+class Database(Enum):
+    SENTERICA: str = "senterica"
+    ECOLI: str = "ecoli"
+
+
 @app.command()
 def build(
         version: str,
@@ -123,20 +137,23 @@ def build(
                    readable=True)] = "db",
         clean: bool = False):
     scheme_info = get_species_scheme(species.value)
-    # Need to fetch all profiles from enterobase
-    # Write to sqlite database
     if not db_dir.exists():
         print(f"Creating directory '{db_dir}'", file=sys.stderr)
         db_dir.mkdir()
     hiercc_download: Path = download_hiercc_profiles(scheme_info["scheme"], api_key, db_dir)
     print(f"Downloaded HierCC profiles from '{scheme_info["scheme"]}'", file=sys.stderr)
-    profiles_csv: Path = download_profiles(scheme_info["profiles"], db_dir)
+    profiles_csv: Path = download_profiles(scheme_info["downloads"], db_dir)
     print(f"Downloaded profiles from '{profiles_csv}'", file=sys.stderr)
-    write_db(version, profiles_csv, hiercc_download)
+    profiles_csv = db_dir / "cgmlst_profiles.csv.gz"
+    hiercc_download: Path = db_dir / "hiercc_profiles.json.gz"
+    genes: list[str] = extract_genes(profiles_csv)
+    alleles_dir: Path = download_alleles(scheme_info["downloads"], genes, db_dir)
+    write_db(version, profiles_csv, hiercc_download, db_dir)
 
     if clean:
         profiles_csv.unlink()
         hiercc_download.unlink()
+        shutil.rmtree(alleles_dir)
 
 
 @app.command()
@@ -152,6 +169,7 @@ def write_db(
                                        dir_okay=True)] = "db",
         metadata_json: str = "db/metadata.json"
 ):
+    print(f"Writing database to '{db_dir}'", file=sys.stderr)
     path = Path(db_dir)
     if Path(metadata_json).exists():
         with open(metadata_json, 'r') as metadata_fh:
@@ -172,6 +190,11 @@ def write_db(
             array_size = sum(family_sizes) + len(family_sizes)
             max_gaps = math.floor(len(family_sizes) * 0.1) + 1
 
+    genes: list[str] = extract_genes(profiles_csv)
+
+    create_allele_db(genes, db_dir / "alleles", db_dir / "alleles.db")
+
+    print("Generating profiles", file=sys.stderr)
     hiercc_profiles_data: tuple[dict[str, list[str]], str, list[int]] = read_raw_hiercc_profiles(
         hiercc_profiles_json)
 
@@ -189,16 +212,14 @@ def write_db(
 
     with (gzip.open(profiles_csv, 'rt') as in_fh, lzma.open(path / "profiles.xz", 'wb') as profile_out,
           lzma.open(path / "gap_profiles.xz", 'wb') as gap_profile_out,
-          lzma.open(path / "ST.txt.xz", "wb") as st_db_out):
+          lzma.open(path / "ST.txt.xz", "wt") as st_db_out):
         reader = csv.reader(in_fh, delimiter="\t")
         next(reader)  # Skip header
         store_profile = partial(write_bitmap_to_filehandle, profile_out, sc_encode)
         store_gaps = partial(write_bitmap_to_filehandle, gap_profile_out, serialize)
         for row in reader:
             code = "_".join([value if value != "0" else "" for value in row[1:]])
-            profile, gap_profile = convert_to_profile(code,
-                                                      array_size,
-                                                      family_sizes)
+            profile, gap_profile = convert_to_profile(code, array_size, family_sizes, lambda x: None)
             if len(profile) != array_size:
                 raise Exception(f"Profile bitarray length {len(profile)}!= {array_size}")
             if len(gap_profile) != len(family_sizes):
@@ -206,7 +227,7 @@ def write_db(
             store_profile(profile)
             store_gaps(gap_profile)
             st = row[0]
-            st_db_out.write(f"{st_info(st, hiercc_profiles_data[0].get(st, []))}\n".encode("utf-8"))
+            st_db_out.write(f"{st_info(st, hiercc_profiles_data[0].get(st, []))}\n")
 
 
 if __name__ == "__main__":

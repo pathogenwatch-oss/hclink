@@ -1,19 +1,17 @@
 import gzip
 import json
 import re
-import shutil
-import socket
-import ssl
 import sys
-import urllib.request
 from datetime import datetime
-from enum import Enum
+from hashlib import sha1
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import requests
 from bitarray import bitarray
-from tenacity import retry, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from hclink.store import finalise_db, initialise_db
 
 
 def st_info(st: str, hiercc_profile: list[str]) -> str:
@@ -23,7 +21,7 @@ def st_info(st: str, hiercc_profile: list[str]) -> str:
         return f'{st},{",".join(hiercc_profile)}'
 
 
-def convert_to_profile(code, array_size: int, family_sizes: list[int]) -> tuple[bitarray, bitarray]:
+def convert_to_profile(code, array_size: int, family_sizes: list[int], lookup) -> tuple[bitarray, bitarray]:
     """
     Converts a CGMLST code to a pair of bitarrays: one for the profile and one for the gap positions.
     The bitarray is the length of the total number of alleles across all loci +
@@ -34,6 +32,7 @@ def convert_to_profile(code, array_size: int, family_sizes: list[int]) -> tuple[
     :param code:
     :param array_size:
     :param family_sizes: list of highest allele ST for each position in the profile
+    :lookup: a function that takes the checksum and locus index to return the ST code.
     :return: (profile_array, gap_array)
     """
     code_arr = code.split("_")
@@ -42,9 +41,18 @@ def convert_to_profile(code, array_size: int, family_sizes: list[int]) -> tuple[
     offset = 0
     for i in range(0, len(code_arr)):
         if code_arr[i].isnumeric():
-            profile_array[offset + int(code_arr[i]) - 1] = 1
+            index = int(code_arr[i])
+            if index > 0:
+                profile_array[offset + index - 1] = 1
+            else:
+                gap_array[i] = 1
         elif code_arr[i] != "":
-            profile_array[offset + family_sizes[i]] = 1
+            # Convert the code
+            st = lookup(code_arr[i],i)
+            if st is not None:
+                profile_array[offset + st - 1] = 1
+            else:
+                profile_array[offset + family_sizes[i]] = 1
         else:
             gap_array[i] = 1
         offset += family_sizes[i] + 1
@@ -58,12 +66,7 @@ def get_species_scheme(species: str, filepath: Path = Path("schemes.json")) -> d
         schemes = json.load(f)
     if species not in schemes["schemes"]:
         raise ValueError(f"Species '{species}' not found in schemes.json")
-    return {"scheme": schemes["schemes"].get(species, ""), "profiles": schemes["profiles"].get(species, "")}
-
-
-class Database(Enum):
-    SENTERICA: str = "senterica"
-    ECOLI: str = "ecoli"
+    return {"scheme": schemes["schemes"].get(species, ""), "downloads": schemes["downloads"].get(species, "")}
 
 
 def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> tuple[dict[str, list[str]], str, list[int]]:
@@ -87,29 +90,58 @@ def read_raw_hiercc_profiles(hiercc_profiles_json: Path) -> tuple[dict[str, list
     return processed, prepend, thresholds
 
 
-def download_profiles(profiles_url: str, data_dir: Path) -> Path:
-    profiles_csv: Path = data_dir / "cgmlst_profiles.csv.gz"
-    req = urllib.request.Request(
-        profiles_url,
-        data=None,
-        headers={
-            'User-Agent': 'mlst-downloader (https://gist.github.com/bewt85/16f2b7b9c3b331f751ce40273240a2eb)'
-        }
-    )
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+# @retry(
+#     wait=wait_exponential(multiplier=1, min=4, max=240),
+#     stop=stop_after_attempt(10),
+# )
+# def download_resource(url: str, out_file: Path) -> Path:
+#     try:
+#         with requests.get(url, stream=True, timeout=30) as response:
+#             response.raise_for_status()
+#             with gzip.open(out_file, 'wb') as f_out:
+#                 for chunk in response.iter_content(chunk_size=8192):
+#                     if chunk:  # filter out keep-alive new chunks
+#                         f_out.write(chunk)
+#     except requests.exceptions.RequestException as e:
+#         raise Exception(f"Failed to download '{url}': {str(e)}")
+#     return out_file
+
+
+@retry(
+    wait=wait_exponential(multiplier=1, min=4, max=240),
+    stop=stop_after_attempt(2),
+)
+def download_resource(url: str, output_path: Path) -> Path:
+    """
+    Download a file from a URL to a specified path.
+
+    Args:
+    url (str): The URL of the file to download.
+    output_path (Path): The path where the file should be saved.
+    is_gzipped (bool): Whether the file is gzipped. Defaults to False.
+
+    Returns:
+    Path: The path where the file was saved.
+
+    Raises:
+    Exception: If there's an error during the download process.
+    """
     try:
-        r = urllib.request.urlopen(req, context=ctx, timeout=10)
-    except KeyboardInterrupt:
-        raise
-    except socket.timeout:
-        raise Exception(f"GET '{profiles_url}' timed out after {10} seconds")
-    if r.getcode() != 200:
-        raise Exception(f"GET '{profiles_url}' returned {r.getcode()}")
-    with open(profiles_csv, 'wb') as out_fh:
-        shutil.copyfileobj(r, out_fh)
-    return profiles_csv
+        with requests.get(url, stream=True, timeout=30) as response:
+            response.raise_for_status()
+            with open(output_path, 'wb') as file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    file.write(chunk)
+
+        return output_path
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Failed to download file from '{url}': {str(e)}")
+
+
+def download_profiles(scheme_url: str, data_dir: Path) -> Path:
+    profiles_csv: Path = data_dir / "cgmlst_profiles.csv.gz"
+    profiles_url = f"{scheme_url}/profiles.list.gz"
+    return download_resource(profiles_url, profiles_csv)
 
 
 @retry(wait=wait_exponential(multiplier=1, min=10, max=7200))
@@ -147,3 +179,37 @@ def download_hiercc_profiles(
         out_fh.write(json.dumps(sts))
 
     return out_file
+
+
+def download_alleles(url: str, genes: list[str], db_dir: Path = "db") -> Path:
+    out_dir = db_dir / "alleles"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for gene in genes:
+        gene_url = f"{url}/{gene}.fasta.gz"
+        gene_fasta = out_dir / f"{gene}.fasta.gz"
+        if not gene_fasta.exists():
+            download_resource(gene_url, gene_fasta)
+    return out_dir
+
+
+def hash_alleles(filename: Path, gene: str, idx: int) -> Iterator[tuple[str, int, int]]:
+        with gzip.open(filename, "rt", encoding='utf-8') as fasta_fh:
+            first_line = fasta_fh.readline()
+            code = int(first_line.strip().replace(f">{gene}_", ""))
+            for line in fasta_fh.readlines():
+                if line.startswith(">"):
+                    code = int(line.strip().replace(f">{gene}_", ""))
+                else:
+                    yield sha1(line.strip().lower().encode()).hexdigest(), idx, code
+
+
+def create_allele_db(genes, alleles_dir: Path, dbfile):
+    db = initialise_db(dbfile)
+    cursor = db.cursor()
+    for idx, gene in enumerate(genes):
+        filename = alleles_dir / f"{gene}.fasta.gz"
+        gene = filename.stem.replace(".fasta", "")
+        cursor.executemany("INSERT INTO alleles(checksum, position, code) VALUES(?,?,?)", hash_alleles(filename, gene, idx))
+    db.commit()
+    cursor.close()
+    finalise_db(db)
