@@ -21,8 +21,12 @@ def st_info(st: str, hiercc_profile: list[str]) -> str:
         return f'{st},{",".join(hiercc_profile)}'
 
 
-def convert_to_profile(code: str, array_size: int, family_sizes: list[int], lookup: Callable[[str, int], int]) -> tuple[
-    bitarray, bitarray]:
+def convert_to_profile(code: str,
+                       array_size: int,
+                       family_sizes: list[int],
+                       lookup: Callable[[str, int], int],
+                       hash_size: int = 20
+                       ) -> tuple[bitarray, bitarray]:
     """
     Converts a CGMLST code to a pair of bitarrays: one for the profile and one for the gap positions.
     The bitarray is the length of the total number of alleles across all loci +
@@ -34,6 +38,7 @@ def convert_to_profile(code: str, array_size: int, family_sizes: list[int], look
     :param array_size:
     :param family_sizes: list of highest allele ST for each position in the profile
     :param lookup: a function that takes the checksum and locus index to return the ST code.
+    :param hash_size: the size of the hash to be used for the checksum (default is 20)
     :return: (profile_array, gap_array)
     """
     code_arr = code.split("_")
@@ -49,7 +54,7 @@ def convert_to_profile(code: str, array_size: int, family_sizes: list[int], look
                 gap_array[i] = 1
         elif code_arr[i] != "":
             # Convert the code
-            st = lookup(code_arr[i], i)
+            st = lookup(code_arr[i][0:hash_size], i)
             if st is not None:
                 profile_array[offset + st - 1] = 1
             else:
@@ -176,7 +181,7 @@ def download_alleles(url: str, genes: list[str], db_dir: Path = "db") -> Path:
     return out_dir
 
 
-def hash_alleles(filename: Path, gene: str, idx: int) -> Iterator[tuple[str, int, int]]:
+def hash_alleles(filename: Path, gene: str, idx: int, hash_size: int = 20) -> Iterator[tuple[str, int, int]]:
     with gzip.open(filename, "rt", encoding='utf-8') as fasta_fh:
         first_line = fasta_fh.readline()
         code = int(first_line.strip().replace(f">{gene}_", ""))
@@ -184,17 +189,17 @@ def hash_alleles(filename: Path, gene: str, idx: int) -> Iterator[tuple[str, int
             if line.startswith(">"):
                 code = int(line.strip().replace(f">{gene}_", ""))
             else:
-                yield sha1(line.strip().lower().encode()).hexdigest(), idx, code
+                yield sha1(line.strip().lower().encode()).hexdigest()[0:hash_size], idx, code
 
 
-def create_allele_db(genes, alleles_dir: Path, dbfile):
+def create_allele_db(genes, alleles_dir: Path, dbfile, hash_size: int = 20):
     db = initialise_db(dbfile)
     cursor = db.cursor()
     for idx, gene in enumerate(genes):
         filename = alleles_dir / f"{gene}.fasta.gz"
         gene = filename.stem.replace(".fasta", "")
         cursor.executemany("INSERT INTO alleles(checksum, position, code) VALUES(?,?,?)",
-                           hash_alleles(filename, gene, idx))
+                           hash_alleles(filename, gene, idx, hash_size))
     db.commit()
     cursor.close()
     finalise_db(db)
