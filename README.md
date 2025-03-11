@@ -16,7 +16,8 @@ serves the following key functions:
    the input genome to known clusters.
 
 4. **Flexible Input**: HClink can process both allele ST (Sequence Type) codes (numeric) and SHA1 checksum codes. The
-   Pathogenwatch cgMLST software will use a SHA-1 checksum when there isn't a corresponding locus code in the database at
+   Pathogenwatch cgMLST software will use a SHA-1 checksum when there isn't a corresponding locus code in the database
+   at
    the time it was built and run. HClink will map these to the corresponding allele if it has been added at Enterobase
    since. It can even be run entirely with checksum codes and these will be mapped to the current allele codes.
 
@@ -54,7 +55,7 @@ is purely composed of checksums.
 ## Via Docker
 
 ```
-> cat my_genome.cgmlst.json | docker run --rm -i hiercc > assignment.json
+> cat my_ecoli.cgmlst.json | docker run --rm -i hiercc:2025_03_06-2-ecoli > assignment.json
 ```
 
 ## On the command line with uv
@@ -103,7 +104,7 @@ be the allele codes joined by underscores. Note that the allele codes must be in
 
 ```
 {
-  "code": "1_1_50_44_2"
+  "code": "1_1_50_44_2_43..."
 }
 ```
 
@@ -200,8 +201,7 @@ to [Pathogenwatch](https://pathogen.watch) for sharing with the community (and c
    Argimón, S., Yeats, C. A., Goater, R. J., Abudahab, K., Taylor, B., Underwood, A., Sánchez-Busó, L., David, S.,
    Mariani-Kurkdjian, P., Lefevre, M., Baquero, F., Campos, J., Chaudhry, R., Chilton, D., Ciesielczuk, H., Comas, I.,
    Crook, D. W., de Mendoza, C., de Pinna, E., ... Aanensen, D. M. (2021). A global resource for genomic predictions of
-   antimicrobial resistance and surveillance of Salmonella Typhi at pathogenwatch. Nature Communications, 12(1),
-    2879. https://doi.org/10.1038/s41467-021-23091-2
+   antimicrobial resistance and surveillance of Salmonella Typhi at pathogenwatch. Nature Communications, 12(1),2879. https://doi.org/10.1038/s41467-021-23091-2
 
 3. cgMLST and whole genome MLST:
    Jolley, K. A., & Maiden, M. C. (2010). BIGSdb: Scalable analysis of bacterial genome variation at the population
