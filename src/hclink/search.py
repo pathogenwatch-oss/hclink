@@ -1,7 +1,7 @@
 import multiprocessing
 import sys
 from functools import partial
-from typing import Any, Callable, Iterator
+from typing import Any, Iterator
 
 from bitarray import bitarray
 from bitarray.util import count_and, count_xor, deserialize, sc_decode

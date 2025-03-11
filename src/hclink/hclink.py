@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from functools import partial
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import typer
 from bitarray import bitarray
@@ -132,7 +132,7 @@ class Database(Enum):
 def build(
         version: str,
         api_key: str,
-        species: Annotated[Database, typer.Option("-s", "--species")] = "ecoli",
+        species: Annotated[Database, typer.Option("-s", "--species")],
         db_dir: Annotated[
             Path,
             Option("-d", "--downloads", help="Download directory", file_okay=False, dir_okay=True, writable=True,
