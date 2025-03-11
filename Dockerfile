@@ -1,31 +1,23 @@
-FROM python:3.11-slim
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
+# Include `--secret id=api,src=api_key.txt` in the docker build command to mount the API key.
+
+# SPECIES = senterica or ecoli
+ARG SPECIES
 ARG VERSION
-ARG API_KEY
-
-#RUN apt update && \
-#    apt install -y --no-install-recommends pip3 && \
-#    rm -rf /var/lib/apt/lists/*
-#
-RUN --mount=type=bind,source=requirements.txt,target=/tmp/requirements.txt \
-    pip install --requirement /tmp/requirements.txt && \
-    pip cache purge && \
-    rm -rf ~/.cache/pip
 
 RUN mkdir /hclink
 
+COPY src uv.lock pyproject.toml .env schemes.json LICENSE README.md /hclink/
+
 WORKDIR /hclink
 
-COPY hclink.py /hclink/
+RUN uv sync --frozen
 
-COPY lib /hclink/lib
-
-COPY LICENSE /hclink/LICENSE
-
-ENV API_KEY=${API_KEY}
 ENV VERSION=${VERSION}
+ENV SPECIES=${SPECIES}
 
-RUN python hclink.py build ${VERSION} ${API_KEY} --clean
+RUN --mount=type=secret,id=api,env=API_KEY uv run hclink build ${VERSION} "${API_KEY}" -s ${SPECIES} --clean
 
-ENTRYPOINT ["python", "hclink.py", "assign", "-"]
+ENTRYPOINT ["uv", "run", "hclink", "assign", "-"]
 
