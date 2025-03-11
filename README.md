@@ -1,6 +1,4 @@
-# HClink - The HierCC linking tool
-
-## About
+# About
 
 HClink is a powerful tool designed to bridge the gap between [Pathogenwatch](https://pathogen.watch/)
 and [Enterobase](https://enterobase.warwick.ac.uk/) hierarchical clustering (HierCC) systems for bacterial genomics. It
@@ -41,15 +39,20 @@ microbial genomics researchers.
 
 Hclink currently supports the _E. coli_ and _S. enterica_ schemes.
 
-## Running HClink
+## Author
 
-### Via Docker
+This software was written by Corin Yeats for
+the [Centre for Genomic Pathogen Surveillance](https://www.pathogensurveillance.net/) with help from Enterobase.
+
+# Running HClink
+
+## Via Docker
 
 ```
 > cat my_genome.cgmlst.json | docker run --rm -i hiercc > assignment.json
 ```
 
-### On the command line with uv
+## On the command line with uv
 
 The easiest way to run hclink directly is using `uv`. This will automatically install all dependencies including the
 correct version of python.
@@ -73,7 +76,7 @@ from STDIN by passing "-" as the filename.
 > cat my_genome.cgmlst.json | uv run hclink - > assignment.json
 ```
 
-## Building the pipeline
+## Building the software
 
 This software is intended to be distributed within Docker, so the recommended build path is to run the Dockerfile.
 It will download all required files and dependencies, and build the latest database from fresh.
@@ -170,8 +173,39 @@ be the allele codes joined by underscores. Note that the allele codes must be in
 }
 ```
 
-## About the checksum codes
+# About the checksum codes
 
 Allele checksums are calculated using a SHA-1 digest of the _lower case_ DNA sequence of the allele. The code is
 guaranteed unique for an individual allele sequence, though the schemes are not guaranteed to not have duplicate loci.
 
+# Citing
+
+If you use the outputs from this tool in a scientific publication, please cite Enterobase. The tool itself is currently
+unpublished, but we recommend you upload your data to [Microreact](https://microreact.org) and genomes
+to [Pathogenwatch](https://pathogen.watch) for sharing with the community (and cite those resources instead).
+
+# Citations
+
+1. Enterobase:
+   Zhou, Z., Alikhan, N. F., Mohamed, K., Fan, Y., Achtman, M., & Brown, D. (2020). The EnteroBase user's guide, with
+   case studies on Salmonella transmissions, Yersinia pestis phylogeny, and Escherichia core genomic diversity. Genome
+   Research, 30(1), 138-152. https://doi.org/10.1101/gr.251678.119
+
+2. Pathogenwatch:
+   Argimón, S., Yeats, C. A., Goater, R. J., Abudahab, K., Taylor, B., Underwood, A., Sánchez-Busó, L., David, S.,
+   Mariani-Kurkdjian, P., Lefevre, M., Baquero, F., Campos, J., Chaudhry, R., Chilton, D., Ciesielczuk, H., Comas, I.,
+   Crook, D. W., de Mendoza, C., de Pinna, E., ... Aanensen, D. M. (2021). A global resource for genomic predictions of
+   antimicrobial resistance and surveillance of Salmonella Typhi at pathogenwatch. Nature Communications, 12(1),
+    2879. https://doi.org/10.1038/s41467-021-23091-2
+
+3. cgMLST and whole genome MLST:
+   Jolley, K. A., & Maiden, M. C. (2010). BIGSdb: Scalable analysis of bacterial genome variation at the population
+   level. BMC Bioinformatics, 11, 595. https://doi.org/10.1186/1471-2105-11-595
+
+4. HierCC method:
+   Zhou, Z., Charlesworth, J., & Achtman, M. (2021). HierCC: A multi-level hierarchical clustering scheme for population
+   genomic analyses. Bioinformatics, 37(20), 3645-3646. https://doi.org/10.1093/bioinformatics/btab234
+
+# License
+
+See the [License](/LICENSE) file
