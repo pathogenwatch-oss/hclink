@@ -46,6 +46,11 @@ the [Centre for Genomic Pathogen Surveillance](https://www.pathogensurveillance.
 
 # Running HClink
 
+## Important note
+
+The HCLink database must be the same or more recent than the database used by the cgMLST tool, unless the cgMLST profile
+is purely composed of checksums.
+
 ## Via Docker
 
 ```
