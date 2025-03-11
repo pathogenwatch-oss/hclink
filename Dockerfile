@@ -6,10 +6,6 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 ARG SPECIES
 ARG VERSION
 
-#RUN apt update && \
-#    apt install -y --no-install-recommends pip3 && \
-#    rm -rf /var/lib/apt/lists/*
-#
 RUN mkdir /hclink
 
 COPY src uv.lock pyproject.toml .env schemes.json LICENSE README.md /hclink/
