@@ -16,8 +16,8 @@ serves the following key functions:
    the input genome to known clusters.
 
 4. **Flexible Input**: HClink can process both allele ST (Sequence Type) codes (numeric) and SHA1 checksum codes. The
-   Pathogenwatch cgMLST code will use a SHA-1 checksum when there isn't a corresponding locus code in the database at
-   the time it was built and run. hclink will map these to the corresponding allele if it has been added at Enterobase
+   Pathogenwatch cgMLST software will use a SHA-1 checksum when there isn't a corresponding locus code in the database at
+   the time it was built and run. HClink will map these to the corresponding allele if it has been added at Enterobase
    since. It can even be run entirely with checksum codes and these will be mapped to the current allele codes.
 
 5. **Integration**: By linking Pathogenwatch and Enterobase clustering systems, HClink facilitates cross-platform
