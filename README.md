@@ -84,6 +84,7 @@ from STDIN by passing "-" as the filename.
 
 ## Building the software
 
+### With Docker
 This software is intended to be distributed within Docker, so the recommended build path is to run the Dockerfile.
 It will download all required files and dependencies, and build the latest database from fresh.
 
@@ -95,6 +96,15 @@ Replace `${SPECIES}` with either:
 
 ```
 > docker build --build-arg VERSION=${VERSION} --build-arg API_KEY=${API_KEY} --rm hclink:latest .
+```
+
+## With uv
+
+
+```
+uv build
+uv pip install dist/*.whl
+hclink --help
 ```
 
 ## Input
