@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import requests
-from bitarray import bitarray
+from pyroaring import BitMap64
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from hclink.store import finalise_db, initialise_db
@@ -22,11 +22,10 @@ def st_info(st: str, hiercc_profile: list[str]) -> str:
 
 
 def convert_to_profile(code: str,
-                       array_size: int,
                        family_sizes: list[int],
                        lookup: Callable[[str, int], int],
                        hash_size: int = 20
-                       ) -> tuple[bitarray, bitarray]:
+                       ) -> tuple[BitMap64, BitMap64]:
     """
     Converts a CGMLST code to a pair of bitarrays: one for the profile and one for the gap positions.
     The bitarray is the length of the total number of alleles across all loci +
@@ -35,35 +34,33 @@ def convert_to_profile(code: str,
     bitarray.
 
     :param code:
-    :param array_size:
     :param family_sizes: list of highest allele ST for each position in the profile
     :param lookup: a function that takes the checksum and locus index to return the ST code.
     :param hash_size: the size of the hash to be used for the checksum (default is 20)
     :return: (profile_array, gap_array)
     """
     code_arr = code.split("_")
-    profile_array = bitarray(array_size)
-    gap_array = bitarray(len(family_sizes))
+    profile_array = BitMap64()
+    gap_array = BitMap64()
     offset = 0
     for i in range(0, len(code_arr)):
         if code_arr[i].isnumeric():
             index = int(code_arr[i])
             if index > 0:
-                profile_array[offset + index - 1] = 1
+                profile_array.add(offset + index - 1)
+                # profile_array[offset + index - 1] = 1
             else:
-                gap_array[i] = 1
+                gap_array.add(i)
         elif code_arr[i] != "":
             # Convert the code
             st = lookup(code_arr[i][0:hash_size], i)
             if st is not None:
-                profile_array[offset + st - 1] = 1
+                profile_array.add(offset + st - 1)
             else:
-                profile_array[offset + family_sizes[i]] = 1
+                profile_array.add(offset + family_sizes[i])
         else:
-            gap_array[i] = 1
+            gap_array.add(i)
         offset += family_sizes[i] + 1
-    if len(profile_array) != array_size:
-        raise Exception(f"Profile bitarray length {len(profile_array)}!= {array_size}")
     return profile_array, gap_array
 
 

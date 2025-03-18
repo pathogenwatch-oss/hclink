@@ -7,3 +7,5 @@ FROM registry.gitlab.com/cgps/pathogenwatch/analyses/hclink:${VERSION}
 RUN apt update && \
     apt install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
+
+ENTRYPOINT ["/bin/bash", "-c", "source .venv/bin/activate && hclink assign -T 1 -"]

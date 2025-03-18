@@ -14,15 +14,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 import typer
-from bitarray import bitarray
-from bitarray.util import sc_encode, serialize
+from pyroaring import BitMap64
 from typer import Argument, Option
 from typing_extensions import Annotated
 
-from hclink.search import imap_search, infer_hiercc_code
-from hclink.store import connect_db, lookup_st, read_bitmaps, read_st_info, write_bitmap_to_filehandle
 from hclink.build import convert_to_profile, create_allele_db, download_alleles, download_hiercc_profiles, \
     download_profiles, get_species_scheme, read_raw_hiercc_profiles, st_info
+from hclink.search import imap_search, infer_hiercc_code
+from hclink.store import connect_db, lookup_st, read_bitmaps, read_st_info, write_bitmap_to_filehandle
 
 app = typer.Typer()
 
@@ -81,20 +80,19 @@ def assign(
     db = connect_db(str(allele_db_path))
     cursor: sqlite3.Cursor = db.cursor()
     lookup: Callable[[str, int], int] = partial(lookup_st, cursor)
-    query_profile: tuple[bitarray, bitarray] = convert_to_profile(query_code,
-                                                                  metadata["array_size"],
+    query_profile: tuple[BitMap64, BitMap64] = convert_to_profile(query_code,
                                                                   metadata["family_sizes"],
                                                                   lookup)
     print(f"Starting search ({datetime.now()})", file=sys.stderr)
     best_hit: dict[str, Any] = imap_search(read_bitmaps(gap_db),
-                           read_st_info(st_db),
-                           read_bitmaps(profile_db),
-                           metadata["max_gaps"],
-                           query_profile,
-                           num_threads,
-                           batch_size)
+                                           read_st_info(st_db),
+                                           read_bitmaps(profile_db),
+                                           metadata["max_gaps"],
+                                           query_profile,
+                                           len(metadata["family_sizes"]),
+                                           num_threads,
+                                           batch_size)
     print(f"Finished search ({datetime.now()})", file=sys.stderr)
-
 
     print(f"Finished task ({datetime.now()})", file=sys.stderr)
     hiercc_code: list[tuple[str, str]] = infer_hiercc_code(best_hit["hiercc_distance"],
@@ -175,7 +173,6 @@ def write_db(
         with open(metadata_json, 'r') as metadata_fh:
             metadata = json.load(metadata_fh)
             family_sizes = metadata["family_sizes"]
-            array_size = metadata["array_size"]
             max_gaps = metadata["max_gaps"]
     else:
         with gzip.open(profiles_csv, 'rt') as in_fh:
@@ -187,7 +184,6 @@ def write_db(
                     if int(row[i]) > family_sizes[i - 1]:
                         family_sizes[i - 1] = int(row[i])
 
-            array_size = sum(family_sizes) + len(family_sizes)
             max_gaps = math.floor(len(family_sizes) * 0.1) + 1
 
     genes: list[str] = extract_genes(profiles_csv)
@@ -201,7 +197,6 @@ def write_db(
     with open(metadata_json, 'w') as metadata_fh:
         print(json.dumps(
             {
-                "array_size": array_size,
                 "family_sizes": family_sizes,
                 "max_gaps": max_gaps,
                 "thresholds": hiercc_profiles_data[2],
@@ -215,15 +210,15 @@ def write_db(
           lzma.open(path / "ST.txt.xz", "wt") as st_db_out):
         reader = csv.reader(in_fh, delimiter="\t")
         next(reader)  # Skip header
-        store_profile = partial(write_bitmap_to_filehandle, profile_out, sc_encode)
-        store_gaps = partial(write_bitmap_to_filehandle, gap_profile_out, serialize)
+        store_profile = partial(write_bitmap_to_filehandle, profile_out, BitMap64.serialize)
+        store_gaps = partial(write_bitmap_to_filehandle, gap_profile_out, BitMap64.serialize)
         for row in reader:
             code = "_".join([value if value != "0" else "" for value in row[1:]])
-            profile, gap_profile = convert_to_profile(code, array_size, family_sizes, lambda x: None)
-            if len(profile) != array_size:
-                raise Exception(f"Profile bitarray length {len(profile)}!= {array_size}")
-            if len(gap_profile) != len(family_sizes):
-                raise Exception(f"Gap profile bytes length {len(gap_profile)}!= {len(family_sizes)}")
+            profile, gap_profile = convert_to_profile(code, family_sizes, lambda a, b: None)
+            # if len(profile) != array_size:
+            #     raise Exception(f"Profile bitarray length {len(profile)}!= {array_size}")
+            # if len(gap_profile) != len(family_sizes):
+            #     raise Exception(f"Gap profile bytes length {len(gap_profile)}!= {len(family_sizes)}")
             store_profile(profile)
             store_gaps(gap_profile)
             st = row[0]

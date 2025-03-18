@@ -2,13 +2,12 @@ import lzma
 import sqlite3
 import struct
 from pathlib import Path
-from collections.abc import Iterator, Callable
-from typing import BinaryIO
+from typing import BinaryIO, Callable, Iterator
 
-from bitarray import bitarray
+from pyroaring import BitMap64
 
 
-def write_bitmap_to_filehandle(filehandle: BinaryIO, encoder: Callable[[bitarray], bytes], bitmap: bitarray) -> None:
+def write_bitmap_to_filehandle(filehandle: BinaryIO, encoder: Callable[[BitMap64], bytes], bitmap: BitMap64) -> None:
     serialized: bytes = encoder(bitmap)
     filehandle.write(struct.pack('<I', len(serialized)))  # Write length of serialized data
     filehandle.write(serialized)
