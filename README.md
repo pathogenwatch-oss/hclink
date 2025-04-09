@@ -1,32 +1,35 @@
 # About
 
-HClink is a powerful tool designed to bridge the gap between [Pathogenwatch](https://pathogen.watch/)
-and [Enterobase](https://enterobase.warwick.ac.uk/) hierarchical clustering (HierCC) systems for bacterial genomics. It
-serves the following key functions:
+HClink is a tool designed to bridge the gap between [Pathogenwatch](https://pathogen.watch/)
+and [Enterobase](https://enterobase.warwick.ac.uk/) hierarchical clustering (HierCC) systems for bacterial genomics.
+Genomes in Pathogenwatch are assigned the nearest possible HierCC code based on the cgMLST profile assigned using the
+Pathogenwatch mlst tool.
+
+While designed for integration into Pathogenwatch it also functions as a standalone tool. Once
+the search database of Enterobase profiles is compiled, the tool is extremely fast, typically less than 2s per genome
+queries against >100,000 profiles. To achieve this it uses the [usearch](https://unum-cloud.github.io/usearch/)
+similarity search engine.
+
+## Core functionality
 
 1. **Profile Matching**: HClink takes a [Pathogenwatch](https://pathogen.watch/) cgMLST (core genome Multi-Locus
    Sequence Typing) profile and matches it to the nearest [Enterobase](https://enterobase.warwick.ac.uk/) profile.
 
 2. **Distance Calculation**: The tool calculates the genetic distance between profiles using the method described in
-   the [Zhou et al. (2021) publication](https://academic.oup.com/bioinformatics/article/37/20/3645/6212647). This
-   approach ensures consistency with established methodologies in the field.
+   the [Zhou et al. (2021) publication](https://academic.oup.com/bioinformatics/article/37/20/3645/6212647) to ensure
+   consistency with Enterobase.
 
 3. **HierCC Code Inference**: Based on the calculated distance, HClink infers the HierCC (Hierarchical Clustering of
-   cgMLST) code up to the allowed threshold. This provides valuable information about the hierarchical relationship of
-   the input genome to known clusters.
+   cgMLST) code up to the threshold matched by the distance.
 
 4. **Flexible Input**: HClink can process both allele ST (Sequence Type) codes (numeric) and SHA1 checksum codes. The
    Pathogenwatch cgMLST software will use a SHA-1 checksum when there isn't a corresponding locus code in the database
-   at
-   the time it was built and run. HClink will map these to the corresponding allele if it has been added at Enterobase
-   since. It can even be run entirely with checksum codes and these will be mapped to the current allele codes.
+   at the time it was built and run. HClink will map these to the corresponding allele if it has been added at
+   Enterobase since. It can even be run entirely with checksum codes and these will be mapped to the current allele
+   codes.
 
-5. **Integration**: By linking Pathogenwatch and Enterobase clustering systems, HClink facilitates cross-platform
-   comparisons and enhances the interoperability of different genomic databases.
-
-This tool is particularly useful for researchers working on bacterial population genetics, epidemiology, and outbreak
-investigations. It allows for rapid classification of new isolates within the context of existing genomic databases,
-aiding in the understanding of bacterial evolution and spread.
+5. **Integration**: This tools allows local searching of the Enterobase genomes with a query profile without installing
+   a complex bioinformatics tool chain.
 
 For more information on the underlying concepts:
 
@@ -34,9 +37,6 @@ For more information on the underlying concepts:
   foundations for core genome MLST.
 - [HierCC explanation](https://enterobase.readthedocs.io/en/latest/features/hierarchical-clustering.html)
 - [Pathogenwatch cgMLST implementation](https://cgps.gitbook.io/pathogenwatch/technical-descriptions/cgmlst)
-
-The software is designed with efficiency and ease of use in mind, making it a valuable addition to the toolkit of
-microbial genomics researchers.
 
 Hclink currently supports the _E. coli_ and _S. enterica_ schemes.
 
@@ -85,6 +85,7 @@ from STDIN by passing "-" as the filename.
 ## Building the software
 
 ### With Docker
+
 This software is intended to be distributed within Docker, so the recommended build path is to run the Dockerfile.
 It will download all required files and dependencies, and build the latest database from fresh.
 
@@ -99,7 +100,6 @@ Replace `${SPECIES}` with either:
 ```
 
 ## With uv
-
 
 ```
 uv build
@@ -128,64 +128,7 @@ be the allele codes joined by underscores. Note that the allele codes must be in
   "gaps_both": 0,
   "gaps_a": 0,
   "gaps_b": 0,
-  "hierCC": [
-    [
-      "d0",
-      "333572"
-    ],
-    [
-      "d2",
-      "47842"
-    ],
-    [
-      "d5",
-      "47842"
-    ],
-    [
-      "d10",
-      "47842"
-    ],
-    [
-      "d20",
-      "47842"
-    ],
-    [
-      "d50",
-      "938"
-    ],
-    [
-      "d100",
-      "938"
-    ],
-    [
-      "d150",
-      "883"
-    ],
-    [
-      "d200",
-      "401"
-    ],
-    [
-      "d400",
-      "401"
-    ],
-    [
-      "d900",
-      "401"
-    ],
-    [
-      "d2000",
-      "44"
-    ],
-    [
-      "d2600",
-      "2"
-    ],
-    [
-      "d2850",
-      "2"
-    ]
-  ]
+  "hierCC": [ [ "d0", "333572" ], [ "d2", "47842" ], [ "d5", "47842" ], [ "d10", "47842" ], [ "d20", "47842" ], [ "d50", "938" ], [ "d100", "938" ], [ "d150", "883" ], [ "d200", "401" ], [ "d400", "401" ], [ "d900", "401" ], [ "d2000", "44" ], [ "d2600", "2" ], [ "d2850", "2" ] ]
 }
 ```
 
@@ -211,7 +154,8 @@ to [Pathogenwatch](https://pathogen.watch) for sharing with the community (and c
    Argimón, S., Yeats, C. A., Goater, R. J., Abudahab, K., Taylor, B., Underwood, A., Sánchez-Busó, L., David, S.,
    Mariani-Kurkdjian, P., Lefevre, M., Baquero, F., Campos, J., Chaudhry, R., Chilton, D., Ciesielczuk, H., Comas, I.,
    Crook, D. W., de Mendoza, C., de Pinna, E., ... Aanensen, D. M. (2021). A global resource for genomic predictions of
-   antimicrobial resistance and surveillance of Salmonella Typhi at pathogenwatch. Nature Communications, 12(1),2879. https://doi.org/10.1038/s41467-021-23091-2
+   antimicrobial resistance and surveillance of Salmonella Typhi at pathogenwatch. Nature Communications, 12(1)
+   ,2879. https://doi.org/10.1038/s41467-021-23091-2
 
 3. cgMLST and whole genome MLST:
    Jolley, K. A., & Maiden, M. C. (2010). BIGSdb: Scalable analysis of bacterial genome variation at the population

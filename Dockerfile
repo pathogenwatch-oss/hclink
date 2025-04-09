@@ -6,9 +6,7 @@ COPY src uv.lock pyproject.toml .env schemes.json LICENSE README.md /hclink/
 
 WORKDIR /hclink
 
-RUN uv venv && uv build
-
-RUN mkdir /build && mv LICENSE README.md schemes.json dist/*.whl /build/
+RUN uv venv && uv build --wheel && mkdir /build && mv LICENSE README.md schemes.json dist/*.whl /build/
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS hclink
 

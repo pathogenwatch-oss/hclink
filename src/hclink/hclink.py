@@ -3,27 +3,59 @@ import gzip
 import json
 import lzma
 import math
-import os
 import shutil
 import sqlite3
 import sys
+import traceback
 from datetime import datetime
 from enum import Enum
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
+import numpy as np
 import typer
-from pyroaring import BitMap64
 from typer import Argument, Option
 from typing_extensions import Annotated
+from usearch.index import Match, Matches
 
-from hclink.build import convert_to_profile, create_allele_db, download_alleles, download_hiercc_profiles, \
-    download_profiles, get_species_scheme, read_raw_hiercc_profiles, st_info
-from hclink.search import imap_search, infer_hiercc_code
-from hclink.store import connect_db, lookup_st, read_bitmaps, read_st_info, write_bitmap_to_filehandle
+from hclink.build import convert_to_vector, create_allele_db, download_alleles, download_hiercc_profiles, \
+    download_profiles, extract_genes, get_species_scheme, read_raw_hiercc_profiles
+from hclink.search import count_shared_zeros, count_zeros, infer_hiercc_code, select_best
+from hclink.store import batch_read_profiles, connect_db, create_index, lookup_st, read_st_info, restore_index
 
 app = typer.Typer()
+
+
+class Database(Enum):
+    SENTERICA: str = "senterica"
+    ECOLI: str = "ecoli"
+
+
+def format_match(query_vector: np.ndarray, match: Match, get_matched_vector, get_st_info):
+    if match is None:
+        gaps: int = count_zeros(query_vector)
+        return {
+            "st": ("", []),
+            "distance": query_vector.size,
+            "hiercc_distance": query_vector.size,
+            "gaps_a": gaps,
+            "gaps_b": -1,
+            "gaps_both": gaps,
+        }
+    else:
+        matched_vector = get_matched_vector(match.key)
+        gaps_a = count_zeros(query_vector)
+        gaps_b = count_zeros(matched_vector)
+        gaps_both = count_shared_zeros(query_vector, matched_vector)
+        return {
+            "st": get_st_info(str(match.key)),
+            "distance": match.distance.item(),
+            "hiercc_distance": match.distance.item(),
+            "gaps_a": gaps_a,
+            "gaps_b": gaps_b,
+            "gaps_both": gaps_both,
+        }
 
 
 @app.command()
@@ -36,27 +68,13 @@ def assign(
         db: Annotated[
             Path,
             Option(
-                "-db",
+                "-d",
                 "--reference-db",
                 help="Reference profiles file. CSV of 'sample,ST,HierCC...,encoded profile'",
                 file_okay=False, dir_okay=True, writable=False,
                 readable=True
             )] = "db",
-        num_threads: Annotated[
-            int,
-            Option(
-                "-T",
-                "--num-threads",
-                help="Number of threads to use for multiprocessing"
-            )] = os.cpu_count(),
-        batch_size: Annotated[
-            int,
-            Option(
-                "-B",
-                "--batch-size",
-                help="Number of profiles to process per batch on each thread"
-            )
-        ] = 1000,
+        num_matches: Annotated[int, Option("-m", "--max-matches", help="Maximum number of matches to return")] = 10,
 ) -> None:
     print(f"Starting ({datetime.now()})", file=sys.stderr)
     if query == '-':
@@ -67,38 +85,42 @@ def assign(
 
     db_path = Path(db)
     scheme_metadata: Path = db_path / "metadata.json"
-    profile_db: Path = db_path / "profiles.xz"
-    gap_db: Path = db_path / "gap_profiles.xz"
     allele_db_path: Path = db_path / "alleles.db"
     st_db: Path = db_path / "ST.txt.xz"
 
-    print(f"Reading metadata from {scheme_metadata} ({datetime.now()})", file=sys.stderr)
+    # print(f"Reading metadata from {scheme_metadata} ({datetime.now()})", file=sys.stderr)
     with open(scheme_metadata, "r") as scheme_metadata_fh:
         metadata = json.load(scheme_metadata_fh)
 
-    print(f"Converting profile ({datetime.now()})", file=sys.stderr)
+    # print(f"Converting profile ({datetime.now()})", file=sys.stderr)
     db = connect_db(str(allele_db_path))
     cursor: sqlite3.Cursor = db.cursor()
     lookup: Callable[[str, int], int] = partial(lookup_st, cursor)
-    query_profile: tuple[BitMap64, BitMap64] = convert_to_profile(query_code,
-                                                                  metadata["family_sizes"],
-                                                                  lookup)
-    print(f"Starting search ({datetime.now()})", file=sys.stderr)
-    best_hit: dict[str, Any] = imap_search(read_bitmaps(gap_db),
-                                           read_st_info(st_db),
-                                           read_bitmaps(profile_db),
-                                           metadata["max_gaps"],
-                                           query_profile,
-                                           len(metadata["family_sizes"]),
-                                           num_threads,
-                                           batch_size)
-    print(f"Finished search ({datetime.now()})", file=sys.stderr)
+    query_vector = convert_to_vector(query_code, lookup)
+    query_gaps = count_zeros(query_vector)
+    if query_gaps >= metadata["max_gaps"]:
+        best_hit = {
+            "st": ("", []),
+            "distance": query_vector.size,
+            "hiercc_distance": query_vector.size,
+            "gaps_a": query_gaps,
+            "gaps_b": -1,
+            "gaps_both": query_gaps,
+        }
+    else:
+        print(f"Starting search ({datetime.now()})", file=sys.stderr)
+        index = restore_index(db_path / "index.usearch", max_gaps=metadata["max_gaps"])
+        matches: Matches = index.search(query_vector, num_matches)
+        print(f"Finished search ({datetime.now()})", file=sys.stderr)
+        st_info = partial(read_st_info, st_db)
+        best_hit = format_match(query_vector, select_best(matches), index.get, st_info)
+        # print(f"Finished formatting ({datetime.now()})", file=sys.stderr)
 
-    print(f"Finished task ({datetime.now()})", file=sys.stderr)
     hiercc_code: list[tuple[str, str]] = infer_hiercc_code(best_hit["hiercc_distance"],
                                                            metadata["thresholds"],
                                                            best_hit["st"][1],
                                                            metadata["prepend"])
+    print(f"Finished task ({datetime.now()})", file=sys.stderr)
     print(json.dumps({
         "versions": {
             "hclink": metadata["version"],
@@ -112,18 +134,6 @@ def assign(
         "referenceGaps": best_hit["gaps_b"],
         "hierCC": hiercc_code
     }), file=sys.stdout)
-
-
-def extract_genes(profiles_csv):
-    with gzip.open(profiles_csv, "rt") as profiles_fh:
-        reader = csv.reader(profiles_fh, delimiter='\t')
-        header = next(reader)
-        return header[1:]
-
-
-class Database(Enum):
-    SENTERICA: str = "senterica"
-    ECOLI: str = "ecoli"
 
 
 @app.command()
@@ -163,41 +173,46 @@ def write_db(
         hiercc_profiles_json: Annotated[
             Path, Option("-c", "--hiercc-profiles-json", help="Compressed HierCC CSV location (.xz extension)",
                          exists=True, readable=True, file_okay=True, dir_okay=False)] = "db/hiercc_profiles.json.gz",
-        db_dir: Annotated[Path, Option("-d", help="Data directory", readable=True, writable=True, file_okay=False,
-                                       dir_okay=True)] = "db",
-        metadata_json: str = "db/metadata.json"
+        db_dir: Annotated[
+            Path, Option("-d", "--database-dir", help="Data directory", readable=True, writable=True, file_okay=False,
+                         dir_okay=True)] = "db",
+        index_batch_size: Annotated[int, Option("-B", "--index-batch-size", help="Batch size for indexing")] = 10000,
 ):
     print(f"Writing database to '{db_dir}'", file=sys.stderr)
-    path = Path(db_dir)
-    if Path(metadata_json).exists():
+    metadata_json = db_dir / "metadata.json"
+    if metadata_json.exists():
         with open(metadata_json, 'r') as metadata_fh:
-            metadata = json.load(metadata_fh)
-            family_sizes = metadata["family_sizes"]
+            try:
+                metadata = json.load(metadata_fh)
+            except json.JSONDecodeError as jde:
+                print(f"Error: Invalid JSON in metadata file. {jde}", file=sys.stderr)
+
+            num_families = metadata["num_families"]
             max_gaps = metadata["max_gaps"]
     else:
         with gzip.open(profiles_csv, 'rt') as in_fh:
             reader = csv.reader(in_fh, delimiter='\t')
             row = next(reader)
-            family_sizes: list[int] = [0] * (len(row) - 1)
-            for row in reader:
-                for i in range(1, len(row)):
-                    if int(row[i]) > family_sizes[i - 1]:
-                        family_sizes[i - 1] = int(row[i])
-
-            max_gaps = math.floor(len(family_sizes) * 0.1) + 1
+            num_families = len(row) - 1  # subtract 1 for the ST column
+            max_gaps = math.floor(num_families * 0.1) + 1
 
     genes: list[str] = extract_genes(profiles_csv)
+    print("Creating allele database", file=sys.stderr)
 
-    create_allele_db(genes, db_dir / "alleles", db_dir / "alleles.db")
+    allele_db = db_dir / "alleles.db"
+    if not allele_db.exists():
+        create_allele_db(genes, db_dir / "alleles", allele_db)
 
     print("Generating profiles", file=sys.stderr)
-    hiercc_profiles_data: tuple[dict[str, list[str]], str, list[int]] = read_raw_hiercc_profiles(
-        hiercc_profiles_json)
+    hiercc_profiles_data: tuple[dict[str, list[str]], str, list[int]] = read_raw_hiercc_profiles(hiercc_profiles_json)
+    with lzma.open(db_dir / "ST.txt.xz", "wt") as st_db_out:
+        for st, hiercc_profile in hiercc_profiles_data[0].items():
+            print(f"{st},{','.join(hiercc_profile)}", file=st_db_out)
 
     with open(metadata_json, 'w') as metadata_fh:
         print(json.dumps(
             {
-                "family_sizes": family_sizes,
+                "num_families": num_families,
                 "max_gaps": max_gaps,
                 "thresholds": hiercc_profiles_data[2],
                 "prepend": hiercc_profiles_data[1],
@@ -205,24 +220,32 @@ def write_db(
                 "version": version
             }), file=metadata_fh)
 
-    with (gzip.open(profiles_csv, 'rt') as in_fh, lzma.open(path / "profiles.xz", 'wb') as profile_out,
-          lzma.open(path / "gap_profiles.xz", 'wb') as gap_profile_out,
-          lzma.open(path / "ST.txt.xz", "wt") as st_db_out):
-        reader = csv.reader(in_fh, delimiter="\t")
-        next(reader)  # Skip header
-        store_profile = partial(write_bitmap_to_filehandle, profile_out, BitMap64.serialize)
-        store_gaps = partial(write_bitmap_to_filehandle, gap_profile_out, BitMap64.serialize)
-        for row in reader:
-            code = "_".join([value if value != "0" else "" for value in row[1:]])
-            profile, gap_profile = convert_to_profile(code, family_sizes, lambda a, b: None)
-            # if len(profile) != array_size:
-            #     raise Exception(f"Profile bitarray length {len(profile)}!= {array_size}")
-            # if len(gap_profile) != len(family_sizes):
-            #     raise Exception(f"Gap profile bytes length {len(gap_profile)}!= {len(family_sizes)}")
-            store_profile(profile)
-            store_gaps(gap_profile)
-            st = row[0]
-            st_db_out.write(f"{st_info(st, hiercc_profiles_data[0].get(st, []))}\n")
+    try:
+        print(f"Starting build function with db={db_dir}, batch_size={index_batch_size}", file=sys.stderr)
+        print(f"Creating index with ndim={num_families}", file=sys.stderr)
+        index = create_index(num_families, max_gaps=max_gaps)
+
+        count = 0
+        for keys, profiles in batch_read_profiles(db_dir / "cgmlst_profiles.csv.gz", max_gaps, batch_size=index_batch_size):
+            index.add(keys, profiles)
+            count += index_batch_size
+            # if count % index_batch_size == 0:
+            print(f"Indexed {count:,} profiles", file=sys.stderr)
+
+        print("Saving index...", file=sys.stderr)
+        index.save(db_dir / "index.usearch")
+        print(f"Successfully indexed {count:,} profiles and saved to index.usearch", file=sys.stderr)
+
+    except FileNotFoundError as fnf:
+        print(f"Error: File not found. {fnf}", file=sys.stderr)
+        sys.exit(1)
+    except gzip.BadGzipFile as bgf:
+        print(f"Error: Invalid gzip file. {bgf}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}", file=sys.stderr)
+        print(traceback.format_exc(), file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,14 +1,15 @@
 [project]
 name = "hclink"
-version = "3.1.2"
-description = "Add your description here"
+version = "4.0.0"
+description = "Software for linking query Enterobase cgMLST profiles to HierCC neighbours."
 requires-python = ">=3.12"
 dependencies = [
     "numba>=0.61.0",
-    "pyroaring>=1.0.0",
+    "pytest>=8.3.5",
     "requests>=2.32.3",
     "tenacity>=9.0.0",
     "typer>=0.15.2",
+    "usearch>=2.16.9",
 ]
 
 [project.scripts]

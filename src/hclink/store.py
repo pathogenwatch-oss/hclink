@@ -1,50 +1,39 @@
+import csv
+import gzip
 import lzma
 import sqlite3
-import struct
+import sys
 from pathlib import Path
-from typing import BinaryIO, Callable, Iterator
+from typing import Iterable, Tuple
 
-from pyroaring import BitMap64
+import numpy as np
+from usearch.compiled import ScalarKind
+from usearch.index import Index
 
-
-def write_bitmap_to_filehandle(filehandle: BinaryIO, encoder: Callable[[BitMap64], bytes], bitmap: BitMap64) -> None:
-    serialized: bytes = encoder(bitmap)
-    filehandle.write(struct.pack('<I', len(serialized)))  # Write length of serialized data
-    filehandle.write(serialized)
+from hclink.search import count_zeros, get_compiled_metric
 
 
-def read_bitmaps(db: Path) -> Iterator[bytes]:
-    with lzma.open(db, "rb") as f:
-        while True:
-            try:
-                size_data: bytes = f.read(4)
-                if not size_data:
-                    break  # End of file reached
-                size: int = struct.unpack('<I', size_data)[0]
-                serialized: bytes = f.read(size)
-                yield serialized
-            except EOFError:
-                break  # End of file reached
-
-
-def read_st_info(st_db: Path) -> Iterator[tuple[str, list[str]]]:
+def read_st_info(st_db: Path, st: str) -> tuple[str, list[str]]:
     with lzma.open(st_db, "rt") as st_db_fh:
         for line in st_db_fh.readlines():
             info: list[str] = line.strip().split(",")
-            yield info[0], info[1:]
+            if st == info[0]:
+                return info[0], info[1:]
+        else:
+            raise ValueError(f"No ST information found for ST code: {st}")
 
 
 def initialise_db(dbfile: str) -> sqlite3.Connection:
     conn: sqlite3.Connection = sqlite3.connect(dbfile)
     cursor: sqlite3.Cursor = conn.cursor()
-    
+
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=OFF")
-    
+
     cursor.execute('CREATE TABLE IF NOT EXISTS alleles(checksum TEXT, position INTEGER, code INTEGER)')
     cursor.execute("DELETE FROM alleles")
     cursor.execute("DROP INDEX IF EXISTS idx_checksum")
-    
+
     cursor.close()
     conn.commit()
     return conn
@@ -66,5 +55,52 @@ def finalise_db(db: sqlite3.Connection) -> None:
 
 
 def lookup_st(cursor: sqlite3.Cursor, st: str, position: int) -> int | None:
-    result: tuple[int] | None = next(cursor.execute("SELECT code FROM alleles WHERE checksum =? AND position =?", (st, position)), None)
+    result: tuple[int] | None = next(
+        cursor.execute("SELECT code FROM alleles WHERE checksum =? AND position =?", (st, position)), None)
     return result[0] if result is not None else None
+
+
+def create_index(ndim: int, max_gaps) -> Index:
+    return Index(
+        ndim=ndim,
+        dtype=ScalarKind.F32,
+        metric=get_compiled_metric(max_gaps)
+    )
+
+
+def restore_index(index_file: Path, max_gaps) -> Index:
+    index = Index.restore(index_file, view=True)
+    index.metric = get_compiled_metric(max_gaps)
+    return index
+
+
+def batch_read_profiles(profiles_file: Path, max_gaps=5000, batch_size: int = 10000, limit: int = -1) -> Iterable[
+    Tuple[np.ndarray, np.ndarray]]:
+    with gzip.open(profiles_file, "rt") as f:
+        reader = csv.reader(f, delimiter='\t')
+        header = next(reader)  # Skip header
+
+        batch_keys = []
+        batch_vectors = []
+        print(f"Using max_gaps = {max_gaps}", file=sys.stderr)
+        for row, line in enumerate(reader):
+            if limit != -1 and row >= limit:
+                break
+
+            key = int(line[0])
+            vector = np.array(list(map(float, line[1:])), dtype=np.float32)
+            if count_zeros(vector) >= max_gaps:  # If max_gaps is set and profile has too many gaps, skip it
+                # print(f"Skipping profile {key} with {count_zeros(vector)} gaps", file=sys.stderr)
+                continue
+            batch_keys.append(key)
+            batch_vectors.append(vector)
+
+            if len(batch_keys) == batch_size:
+                # print(f"Read {len(batch_keys)} profiles", file=sys.stderr)
+                yield np.array(batch_keys), np.array(batch_vectors)
+                batch_keys = []
+                batch_vectors = []
+
+        # Yield any remaining profiles
+        if batch_keys:
+            yield np.array(batch_keys), np.array(batch_vectors)

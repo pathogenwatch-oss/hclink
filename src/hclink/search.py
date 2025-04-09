@@ -1,51 +1,70 @@
-import multiprocessing
-import sys
-from functools import partial
-from typing import Any, Iterator
+import math
 
-from numba import float32, int32, jit, types
-from pyroaring import BitMap64
+import numpy as np
+from numba import carray, cfunc, njit, types
+from usearch.compiled import MetricKind, MetricSignature
+from usearch.index import CompiledMetric, Match, Matches
 
-def comparison(
-        query_profile: tuple[BitMap64, BitMap64],
-        profile_size: int,
-        reference: tuple[bytes, bytes, str],
-) -> tuple[float, int, int, int, int, str]:
-    reference_profile = BitMap64.deserialize(reference[0])
-    reference_gaps = BitMap64.deserialize(reference[1])
+signature = types.float32(
+    types.CPointer(types.float32),
+    types.CPointer(types.float32),
+    types.uint64)
 
-    shared_gaps: int = query_profile[1].intersection_cardinality(reference_gaps)
-    profile_a_gaps: int = query_profile[1].get_statistics()["cardinality"]
-    profile_b_gaps: int = reference_gaps.get_statistics()["cardinality"]
-    bit_distance: int = query_profile[0].symmetric_difference_cardinality(reference_profile)
-    raw_distance, gaps_a, gaps_b = compiled_compare(bit_distance, shared_gaps, profile_a_gaps, profile_b_gaps)
-    hiercc_distance = calculate_hiercc_distance(raw_distance, gaps_a, gaps_b, shared_gaps, profile_size)
-    return hiercc_distance, raw_distance, gaps_a, gaps_b, shared_gaps, reference[2]
 
-@jit(types.Tuple((int32, int32, int32))(int32, int32, int32, int32), nopython=True, nogil=True)
-def compiled_compare(distance:int, shared_gaps: int, profile_a_gaps: int, profile_b_gaps: int) -> tuple[int, int, int]:
-    gaps_a: int = profile_a_gaps - shared_gaps
-    gaps_b: int = profile_b_gaps - shared_gaps
-    gap_adjust: int = gaps_a + gaps_b
-    return int((distance - gap_adjust) / 2), gaps_a, gaps_b
+@njit
+def debug_print(*args):
+    print(*args)
 
-@jit(float32(int32, int32, int32, int32, int32), nopython=True, nogil=True)
-def calculate_hiercc_distance(distance: int, query_gaps: int, reference_gaps: int, shared_gaps: int,
-                              profile_size: int) -> float:
-    # Distance bigger than profile size (i.e. failed comparison) then just return profile size
-    if distance >= profile_size:
-        return float(profile_size)
-    if distance == 0 and query_gaps == 0 and reference_gaps == 0:
-        cc_distance: float = 0.0
-    else:
-        query_core: float = float(profile_size - query_gaps - shared_gaps) - 0.03 * float(profile_size)
-        # if query core is > s use equation 1, else use equation 2
-        common_core: float = float(profile_size - query_gaps - reference_gaps - shared_gaps)
+
+def get_compiled_metric(max_gaps: int):
+    return CompiledMetric(pointer=get_distance_score(max_gaps).address, kind=MetricKind.Unknown, signature=MetricSignature.ArrayArraySize)
+
+
+def get_distance_score(max_gaps: int):
+
+    @cfunc(signature)
+    @njit
+    def hiercc_distance(a_ptr, b_ptr, ndim):
+        a_array = carray(a_ptr, ndim)
+        b_array = carray(b_ptr, ndim)
+        
+        gaps_a = 0
+        gaps_b = 0
+        gaps_both = 0
+        distance = 0
+        
+        for i in range(ndim):
+            a_val = a_array[i]
+            b_val = b_array[i]
+            if a_val == b_val:
+                gaps_both += (a_val == 0)
+            else:
+                distance += (a_val != 0 and b_val != 0)
+                gaps_a += (a_val == 0)
+                gaps_b += (b_val == 0)
+        
+        if gaps_both >= max_gaps or distance >= ndim:
+            return np.float32(ndim)
+        
+        if distance == 0 and gaps_a == 0 and gaps_b == 0:
+            return np.float32(0.0)
+        
+        ndim_f32 = np.float32(ndim)
+        query_core = ndim_f32 - np.float32(gaps_a + gaps_both) - np.float32(0.03 * ndim)
+        common_core = ndim_f32 - np.float32(gaps_a + gaps_b + gaps_both)
+        
         if common_core >= query_core:
-            cc_distance: float = (float(profile_size) * float(distance)) / common_core + 0.5
+            if common_core == 0:
+                return ndim_f32
+            cc_distance = (ndim_f32 * np.float32(distance)) / common_core + np.float32(0.5)
         else:
-            cc_distance: float = ((float(profile_size) * float(distance + query_core - common_core)) / query_core) + 0.5
-    return cc_distance
+            if query_core == 0:
+                return ndim_f32
+            cc_distance = ((ndim_f32 * np.float32(distance + query_core - common_core)) / query_core) + np.float32(0.5)
+        
+        return min(cc_distance, ndim_f32)
+
+    return hiercc_distance
 
 def infer_hiercc_code(hier_cc_distance: float,
                       hiercc_thresholds: list[int],
@@ -61,60 +80,26 @@ def infer_hiercc_code(hier_cc_distance: float,
         inferred.append((f"{prepend}{threshold}", (profile[index] if hier_cc_distance <= threshold else "")))
     return inferred
 
-def imap_search(gap_profiles: Iterator[bytes],
-                sts: Iterator[tuple[str, list[str]]],
-                profiles: Iterator[bytes],
-                max_gaps: int,
-                query_profile: tuple[BitMap64, BitMap64],
-                profile_size: int,
-                num_cpu: int = 1,
-                chunksize: int = 10000,
-                threshold: int = sys.maxsize
-                ) -> dict[str, Any]:
-    if query_profile[1].get_statistics()["cardinality"] >= max_gaps:
-        return {
-            "st": ("", []),
-            "distance": threshold,
-            "hiercc_distance": threshold,
-            "gaps_a": query_profile[1].get_statistics()["cardinality"],
-            "gaps_b": -1,
-            "gaps_both": query_profile[1].get_statistics()["cardinality"],
-        }
-    lowest_distance: int = threshold
-    best_hits: list[tuple[str, int, int, int, int]] = []
 
-    query_comparison = partial(comparison, query_profile, profile_size)
+def select_best(matches: Matches) -> Match | None:
+    best_distance = np.inf
+    best_matches = []
+    for index, distance in enumerate(matches.distances):
+        if distance < best_distance:
+            best_distance = distance
+            best_matches = [index]
+        elif distance == best_distance:
+            best_matches.append(index)
+        else:
+            break
+    if not best_matches:
+        return None
+    return matches[best_matches[0]]
 
-    print(f"Using {num_cpu} CPU cores", file=sys.stderr)
-    with multiprocessing.Pool(num_cpu) as pool:
-        for result in pool.imap_unordered(query_comparison,
-                                          zip(profiles,
-                                              gap_profiles,
-                                              sts),
-                                          chunksize=chunksize):
-            total_gaps: int = result[2] + result[3] + result[4]
-            if total_gaps >= max_gaps:
-                continue
-            if result[0] < lowest_distance:
-                best_hits.append(result)
-                lowest_distance = result[0]
-            elif result[0] == lowest_distance:
-                if total_gaps < best_hits[-1][2] + best_hits[-1][3] + best_hits[-1][4]:
-                    best_hits.append(result)
-    if not best_hits:
-        return {
-            "st": ("", []),
-            "distance": threshold,
-            "hiercc_distance": threshold,
-            "gaps_a": query_profile[1].get_statistics()["cardinality"],
-            "gaps_b": -1,
-            "gaps_both": query_profile[1].get_statistics()["cardinality"],
-        }
-    return {
-        "st": best_hits[-1][5],
-        "hiercc_distance": best_hits[-1][0],
-        "distance": best_hits[-1][1],
-        "gaps_a": best_hits[-1][2],
-        "gaps_b": best_hits[-1][3],
-        "gaps_both": best_hits[-1][4]
-    }
+
+def count_zeros(profile: np.ndarray) -> int:
+    return profile.size - np.count_nonzero(profile)
+
+
+def count_shared_zeros(a: np.ndarray, b: np.ndarray) -> int:
+    return np.sum(np.logical_and(a == 0, b == 0)).item()
