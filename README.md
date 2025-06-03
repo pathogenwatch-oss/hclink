@@ -55,7 +55,7 @@ is purely composed of checksums.
 ## Via Docker
 
 ```
-> cat my_ecoli.cgmlst.json | docker run --rm -i hiercc:2025_03_06-2-ecoli > assignment.json
+> cat my_ecoli.cgmlst.json | docker run --rm -i hclink:2025_03_06-2-ecoli > assignment.json
 ```
 
 ## On the command line with uv
